@@ -270,10 +270,10 @@ fi
 
 echo "Linking shared files/directories..."
 mkdir -p "${APP_BASE_DIR}/shared"/{var/log,public/uploads}
-mkdir -p "${NEW_RELEASE}/var" "${NEW_RELEASE}/public"
+install -d -o "${APP_USER}" -g "${APP_GROUP}" "${NEW_RELEASE}/var" "${NEW_RELEASE}/public"
 rm -rf "${NEW_RELEASE}/var/log"
 ln -s "${APP_BASE_DIR}/shared/var/log" "${NEW_RELEASE}/var/log"
-mkdir -p "${NEW_RELEASE}/var/cache"
+install -d -o "${APP_USER}" -g "${APP_GROUP}" "${NEW_RELEASE}/var/cache"
 
 if [[ -e "${NEW_RELEASE}/public/uploads" && ! -L "${NEW_RELEASE}/public/uploads" ]]; then
   rm -rf "${NEW_RELEASE}/public/uploads"
