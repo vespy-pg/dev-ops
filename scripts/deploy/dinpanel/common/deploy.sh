@@ -219,6 +219,7 @@ normalize_db_env_in_ops() {
 
   db_host="${db_host:-127.0.0.1}"
   db_port="${db_port:-5432}"
+  set_env_value "${ops_db_env}" APP_ENV "${APP_RUNTIME_ENV}"
   if [[ -n "${db_name}" && -n "${db_user}" && -n "${db_password}" ]]; then
     set_env_value "${ops_db_env}" DATABASE_URL "pgsql:host=${db_host};port=${db_port};dbname=${db_name};user=${db_user};password=${db_password}"
   fi

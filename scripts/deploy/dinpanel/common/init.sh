@@ -586,7 +586,21 @@ VHOST_CONF="/etc/apache2/sites-available/${APP_NAME}.conf"
 cat > "${VHOST_CONF}" <<EOF
 <VirtualHost *:80>
     ServerName ${APP_DOMAIN}
-    ServerAlias ${API_DOMAIN}
+
+    DocumentRoot ${APP_BASE_DIR}/current/web/dist/spa
+
+    <Directory ${APP_BASE_DIR}/current/web/dist/spa>
+        AllowOverride None
+        Require all granted
+        FallbackResource /index.html
+    </Directory>
+
+    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_error.log
+    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_access.log combined
+</VirtualHost>
+
+<VirtualHost *:80>
+    ServerName ${API_DOMAIN}
 
     DocumentRoot ${APP_BASE_DIR}/current/public
 
@@ -600,8 +614,8 @@ cat > "${VHOST_CONF}" <<EOF
         SetHandler "proxy:unix:${PHP_FPM_SOCK}|fcgi://localhost/"
     </FilesMatch>
 
-    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_error.log
-    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_access.log combined
+    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_api_error.log
+    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_api_access.log combined
 </VirtualHost>
 EOF
 a2ensite "${APP_NAME}.conf"
