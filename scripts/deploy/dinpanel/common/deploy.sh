@@ -291,7 +291,7 @@ su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && composer install ${CO
 
 if [[ "${ENABLE_WEB_BUILD}" == "1" ]]; then
   echo "Building SPA..."
-  su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && npm ci && npm run web:build"
+  su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && if [[ -f web/package.json ]]; then npm --prefix web ci && npm --prefix web run build; else npm ci && npm run web:build; fi"
 fi
 
 echo "Running Doctrine migrations..."

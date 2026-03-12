@@ -582,7 +582,7 @@ su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && composer install --n
 
 if [[ "${ENABLE_WEB_BUILD}" == "1" ]]; then
   echo "Installing and building SPA..."
-  su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && npm ci && npm run web:build"
+  su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && if [[ -f web/package.json ]]; then npm --prefix web ci && npm --prefix web run build; else npm ci && npm run web:build; fi"
 fi
 
 echo "Clearing Symfony cache..."
