@@ -198,6 +198,44 @@ copy_ops_env_to_release() {
   done < <(find "${release_env_dir}" -maxdepth 1 -type f -name "*.env.example" -printf "%f\n" | sort)
 }
 
+ensure_node_runtime() {
+  local min_major=20
+  local min_minor=12
+  local version=""
+  local major=0
+  local minor=0
+  local rest=""
+  local install_required=0
+
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    install_required=1
+  else
+    version="$(node -p 'process.versions.node' 2>/dev/null || true)"
+    if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      install_required=1
+    else
+      major="${version%%.*}"
+      rest="${version#*.}"
+      minor="${rest%%.*}"
+      if (( major < min_major || (major == min_major && minor < min_minor) )); then
+        install_required=1
+      fi
+    fi
+  fi
+
+  if (( install_required == 0 )); then
+    return 0
+  fi
+
+  echo "Installing Node.js 22.x (required >=${min_major}.${min_minor})..."
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh
+  bash /tmp/nodesource_setup.sh
+  apt-get install -y nodejs
+  rm -f /tmp/nodesource_setup.sh
+}
+
 PHP_VERSION="$(resolve_php_version "${PHP_VERSION}")"
 PHP_BIN="php${PHP_VERSION}"
 if [[ -z "${PHP_FPM_SERVICE}" ]]; then
@@ -223,10 +261,8 @@ if (( ${#MISSING_EXTENSIONS[@]} > 0 )); then
   echo "Warning: continuing because ALLOW_MISSING_EXTENSIONS=1 (temporary pre-prod mode)."
 fi
 
-if [[ "${ENABLE_WEB_BUILD}" == "1" ]] && ! command -v npm >/dev/null 2>&1; then
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update
-  apt-get install -y nodejs npm
+if [[ "${ENABLE_WEB_BUILD}" == "1" ]]; then
+  ensure_node_runtime
 fi
 
 TIMESTAMP="$(date +%Y%m%d%H%M%S)"
