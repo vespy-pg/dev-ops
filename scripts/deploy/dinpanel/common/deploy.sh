@@ -30,6 +30,7 @@ APP_REPO_URL="${APP_REPO_URL:-git@github.com:vespy-pg/DINPanel.git}"
 GIT_REF="${GIT_REF:-main}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 APP_RUNTIME_ENV="${APP_RUNTIME_ENV:-${DEPLOY_ENV_NORMALIZED}}"
+DB_ENV_FILE="${DB_ENV_FILE:-.api.env}"
 
 PHP_VERSION="${PHP_VERSION:-auto}"
 PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-}"
@@ -135,6 +136,81 @@ collect_required_project_extensions() {
     ksort($exts);
     echo implode(PHP_EOL, array_keys($exts));
   ' "${project_dir}"
+}
+
+escape_sed_replacement() {
+  printf '%s' "$1" | sed 's/[\/&]/\\&/g'
+}
+
+set_env_value() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local escaped
+  escaped="$(escape_sed_replacement "${value}")"
+  if grep -qE "^${key}=" "${file}"; then
+    sed -i "s/^${key}=.*/${key}=${escaped}/" "${file}"
+  else
+    echo "${key}=${value}" >> "${file}"
+  fi
+}
+
+read_env_value() {
+  local file="$1"
+  local key="$2"
+  sed -n "s/^${key}=//p" "${file}" | head -n1
+}
+
+normalize_name_with_env_suffix() {
+  local base="$1"
+  local suffix="_${DEPLOY_ENV_NORMALIZED}"
+  if [[ "${base}" == *"${suffix}" ]]; then
+    base="${base%${suffix}}"
+  fi
+  echo "${base}${suffix}"
+}
+
+normalize_db_env_in_ops() {
+  local ops_db_env="${OPS_ENV_DIR}/${DB_ENV_FILE}"
+  local db_name=""
+  local db_user=""
+  local db_password=""
+  local db_host=""
+  local db_port=""
+
+  if [[ ! -f "${ops_db_env}" ]]; then
+    if [[ -f "${OPS_ENV_DIR}/.env" ]]; then
+      ops_db_env="${OPS_ENV_DIR}/.env"
+    elif [[ -f "${OPS_ENV_DIR}/.api.env" ]]; then
+      ops_db_env="${OPS_ENV_DIR}/.api.env"
+    else
+      return 0
+    fi
+  fi
+
+  db_name="$(read_env_value "${ops_db_env}" DB_NAME)"
+  db_user="$(read_env_value "${ops_db_env}" DB_USER)"
+  db_password="$(read_env_value "${ops_db_env}" DB_PASSWORD)"
+  db_host="$(read_env_value "${ops_db_env}" DB_HOST)"
+  db_port="$(read_env_value "${ops_db_env}" DB_PORT)"
+
+  if [[ -n "${db_name}" ]]; then
+    db_name="$(normalize_name_with_env_suffix "${db_name}")"
+    set_env_value "${ops_db_env}" DB_NAME "${db_name}"
+  fi
+  if [[ -n "${db_user}" ]]; then
+    db_user="$(normalize_name_with_env_suffix "${db_user}")"
+    set_env_value "${ops_db_env}" DB_USER "${db_user}"
+  fi
+
+  db_host="${db_host:-127.0.0.1}"
+  db_port="${db_port:-5432}"
+  if [[ -n "${db_name}" && -n "${db_user}" && -n "${db_password}" ]]; then
+    set_env_value "${ops_db_env}" DATABASE_URL "pgsql:host=${db_host};port=${db_port};dbname=${db_name};user=${db_user};password=${db_password}"
+  fi
+
+  chmod 600 "${ops_db_env}"
+  chown "${APP_USER}:${APP_GROUP}" "${ops_db_env}"
 }
 
 validate_required_ops_env_files() {
@@ -283,6 +359,7 @@ su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; git clone '${A
 su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; cd '${NEW_RELEASE}' && git fetch --tags origin '${GIT_REF}' && git checkout -q FETCH_HEAD"
 
 validate_required_ops_env_files "${NEW_RELEASE}"
+normalize_db_env_in_ops
 copy_ops_env_to_release "${NEW_RELEASE}"
 
 echo "Checking PHP extensions required by composer files..."
