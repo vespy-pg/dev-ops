@@ -261,6 +261,7 @@ bootstrap_database() {
   local -a phase1_sql_files=()
   local -a phase2_sql_files=()
   local -a ops_env_files=()
+  local db_admin_psql_base=()
 
   if [[ ! -f "${ops_main_env}" ]]; then
     if [[ -f "${OPS_ENV_DIR}/.env" ]]; then
@@ -313,6 +314,12 @@ bootstrap_database() {
     return 0
   fi
 
+  if [[ "${DB_HOST}" == "127.0.0.1" || "${DB_HOST}" == "localhost" ]] && [[ -z "${DB_ADMIN_PASSWORD}" ]]; then
+    db_admin_psql_base=(su -s /bin/bash - postgres -c)
+  else
+    db_admin_psql_base=(env "PGPASSWORD=${DB_ADMIN_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_ADMIN_USER}" -d "${DB_ADMIN_DB}")
+  fi
+
   mapfile -t sql_files < <(find "${release_dir}/sql" -maxdepth 1 -type f -name "*.sql" ! -name "0_*" -printf "%f\n" | sort)
   for sql_file in "${sql_files[@]}"; do
     if [[ "${sql_file}" == 1_* ]]; then
@@ -324,16 +331,19 @@ bootstrap_database() {
 
   for sql_file in "${phase1_sql_files[@]}"; do
     echo "Running admin sql/${sql_file}"
-    PGPASSWORD="${DB_ADMIN_PASSWORD}" psql \
-      -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_ADMIN_USER}" -d "${DB_ADMIN_DB}" \
-      -v ON_ERROR_STOP=1 \
-      -v db_name="${DB_NAME}" \
-      -v db_user="${DB_USER}" \
-      -v db_password="${DB_PASSWORD}" \
-      -v db_owner="${DB_OWNER}" \
-      -v schema_name="${DB_SCHEMA_NAME}" \
-      -v schema_owner="${DB_SCHEMA_OWNER}" \
-      -f "${release_dir}/sql/${sql_file}"
+    if [[ "${db_admin_psql_base[0]}" == "su" ]]; then
+      "${db_admin_psql_base[@]}" "psql -d '${DB_ADMIN_DB}' -v ON_ERROR_STOP=1 -v db_name='${DB_NAME}' -v db_user='${DB_USER}' -v db_password='${DB_PASSWORD}' -v db_owner='${DB_OWNER}' -v schema_name='${DB_SCHEMA_NAME}' -v schema_owner='${DB_SCHEMA_OWNER}' -f '${release_dir}/sql/${sql_file}'"
+    else
+      "${db_admin_psql_base[@]}" \
+        -v ON_ERROR_STOP=1 \
+        -v db_name="${DB_NAME}" \
+        -v db_user="${DB_USER}" \
+        -v db_password="${DB_PASSWORD}" \
+        -v db_owner="${DB_OWNER}" \
+        -v schema_name="${DB_SCHEMA_NAME}" \
+        -v schema_owner="${DB_SCHEMA_OWNER}" \
+        -f "${release_dir}/sql/${sql_file}"
+    fi
   done
 
   for sql_file in "${phase2_sql_files[@]}"; do
@@ -382,11 +392,15 @@ fi
 echo "Using PHP version ${PHP_VERSION}"
 apt-get install -y \
   git curl unzip ca-certificates lsb-release apt-transport-https software-properties-common gnupg2 openssl \
-  apache2 libapache2-mod-fcgid postgresql-client \
+  apache2 libapache2-mod-fcgid postgresql postgresql-client \
   "php${PHP_VERSION}" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-fpm" \
   "php${PHP_VERSION}-common" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-dom" \
   "php${PHP_VERSION}-xml" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-intl" "php${PHP_VERSION}-gd" \
   "php${PHP_VERSION}-zip" "php${PHP_VERSION}-pgsql"
+
+if systemctl list-unit-files | grep -q '^postgresql\.service'; then
+  systemctl enable --now postgresql
+fi
 
 if ! require_php_pkg "php${PHP_VERSION}-bcmath"; then
   [[ "${ALLOW_MISSING_EXTENSIONS}" == "1" ]] || exit 1
