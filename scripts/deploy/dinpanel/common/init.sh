@@ -257,6 +257,9 @@ bootstrap_database() {
   local release_dir="$1"
   local ops_main_env="${OPS_ENV_DIR}/${DB_ENV_FILE}"
   local sql_file=""
+  local sql_path=""
+  local run_sql_path=""
+  local temp_sql=""
   local -a sql_files=()
   local -a phase1_sql_files=()
   local -a phase2_sql_files=()
@@ -347,6 +350,17 @@ bootstrap_database() {
   done
 
   for sql_file in "${phase2_sql_files[@]}"; do
+    sql_path="${release_dir}/sql/${sql_file}"
+    run_sql_path="${sql_path}"
+    temp_sql=""
+
+    if [[ "${sql_file}" == 3_* ]]; then
+      temp_sql="$(mktemp)"
+      cp "${sql_path}" "${temp_sql}"
+      perl -pi -e 'if (/^INSERT INTO / && /;$/ && !/ON CONFLICT DO NOTHING;$/) { s/;$/ ON CONFLICT DO NOTHING;/ }' "${temp_sql}"
+      run_sql_path="${temp_sql}"
+    fi
+
     echo "Running app sql/${sql_file}"
     PGPASSWORD="${DB_PASSWORD}" psql \
       -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" \
@@ -357,7 +371,11 @@ bootstrap_database() {
       -v db_owner="${DB_OWNER}" \
       -v schema_name="${DB_SCHEMA_NAME}" \
       -v schema_owner="${DB_SCHEMA_OWNER}" \
-      -f "${release_dir}/sql/${sql_file}"
+      -f "${run_sql_path}"
+
+    if [[ -n "${temp_sql}" ]]; then
+      rm -f "${temp_sql}"
+    fi
   done
 }
 
