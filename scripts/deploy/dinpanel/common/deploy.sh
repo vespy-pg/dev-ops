@@ -14,6 +14,9 @@ fi
 DEPLOY_ENV_RAW="${1}"
 DEPLOY_ENV_NORMALIZED="${DEPLOY_ENV_RAW,,}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OPS_ENV_DIR="${SCRIPT_DIR}/../${DEPLOY_ENV_NORMALIZED}"
+
 APP_NAME="${APP_NAME:-dinpanel}"
 if [[ "${DEPLOY_ENV_NORMALIZED}" == "prod" ]]; then
   APP_DOMAIN="dinpanel.com"
@@ -26,13 +29,12 @@ APP_BASE_DIR="${APP_BASE_DIR:-/var/www/${APP_NAME}}"
 APP_REPO_URL="${APP_REPO_URL:-git@github.com:vespy-pg/DINPanel.git}"
 GIT_REF="${GIT_REF:-main}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
-APP_RUNTIME_ENV="${APP_RUNTIME_ENV:-prod}"
+APP_RUNTIME_ENV="${APP_RUNTIME_ENV:-${DEPLOY_ENV_NORMALIZED}}"
 
 PHP_VERSION="${PHP_VERSION:-auto}"
 PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-}"
 APACHE_SERVICE="${APACHE_SERVICE:-apache2}"
 
-RUN_MIGRATIONS="${RUN_MIGRATIONS:-0}" # 1 = run doctrine:migrations:migrate
 ENABLE_WEB_BUILD="${ENABLE_WEB_BUILD:-0}"
 ALLOW_MISSING_EXTENSIONS="${ALLOW_MISSING_EXTENSIONS:-0}" # 1 = pre-prod fallback
 
@@ -51,8 +53,8 @@ if [[ ! -d "${APP_BASE_DIR}/shared" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${APP_BASE_DIR}/shared/env/.env.local" ]]; then
-  echo "Missing ${APP_BASE_DIR}/shared/env/.env.local. Run init script first." >&2
+if [[ ! -d "${OPS_ENV_DIR}" ]]; then
+  echo "Missing ops env directory: ${OPS_ENV_DIR}. Run init script first." >&2
   exit 1
 fi
 
@@ -88,14 +90,6 @@ resolve_php_version() {
   echo "${detected}"
 }
 
-PHP_VERSION="$(resolve_php_version "${PHP_VERSION}")"
-PHP_BIN="php${PHP_VERSION}"
-if [[ -z "${PHP_FPM_SERVICE}" ]]; then
-  PHP_FPM_SERVICE="php${PHP_VERSION}-fpm"
-fi
-
-echo "Using PHP version ${PHP_VERSION}"
-
 extension_is_loaded() {
   local ext="$1"
   "${PHP_BIN}" -m | awk '{print tolower($0)}' | grep -q "^${ext}$"
@@ -130,11 +124,8 @@ collect_required_project_extensions() {
       }
       $add($data["require"] ?? null);
       $add($data["platform"] ?? null);
-      foreach (["packages"] as $section) {
-        if (!isset($data[$section]) || !is_array($data[$section])) {
-          continue;
-        }
-        foreach ($data[$section] as $pkg) {
+      if (isset($data["packages"]) && is_array($data["packages"])) {
+        foreach ($data["packages"] as $pkg) {
           if (is_array($pkg)) {
             $add($pkg["require"] ?? null);
           }
@@ -146,26 +137,45 @@ collect_required_project_extensions() {
   ' "${project_dir}"
 }
 
-ensure_release_env_file() {
+validate_required_ops_env_files() {
   local release_dir="$1"
-  local env_dir="${release_dir}/env"
-  local env_file="${env_dir}/.env"
-  local env_example="${env_dir}/.env.example"
+  local release_env_dir="${release_dir}/env"
+  local example_file=""
+  local required_target=""
+  local missing=()
 
-  mkdir -p "${env_dir}"
-  if [[ -f "${env_file}" ]]; then
-    return 0
-  fi
+  mapfile -t EXAMPLE_FILES < <(find "${release_env_dir}" -maxdepth 1 -type f -name "*.env.example" -printf "%f\n" | sort)
+  for example_file in "${EXAMPLE_FILES[@]}"; do
+    required_target="${example_file%.example}"
+    if [[ ! -f "${OPS_ENV_DIR}/${required_target}" ]]; then
+      missing+=("${required_target}")
+    fi
+  done
 
-  if [[ -f "${env_example}" ]]; then
-    cp "${env_example}" "${env_file}"
-  else
-    cat > "${env_file}" <<EOF
-APP_ENV=${APP_RUNTIME_ENV}
-APP_DEBUG=0
-EOF
+  if (( ${#missing[@]} > 0 )); then
+    echo "Missing env files in ${OPS_ENV_DIR}: ${missing[*]}" >&2
+    exit 1
   fi
 }
+
+copy_ops_env_to_release() {
+  local release_dir="$1"
+  local release_env_dir="${release_dir}/env"
+  local ops_env_file=""
+
+  mkdir -p "${release_env_dir}"
+  while IFS= read -r -d '' ops_env_file; do
+    cp "${ops_env_file}" "${release_env_dir}/$(basename "${ops_env_file}")"
+  done < <(find "${OPS_ENV_DIR}" -maxdepth 1 -type f -name "*.env" -print0 | sort -z)
+}
+
+PHP_VERSION="$(resolve_php_version "${PHP_VERSION}")"
+PHP_BIN="php${PHP_VERSION}"
+if [[ -z "${PHP_FPM_SERVICE}" ]]; then
+  PHP_FPM_SERVICE="php${PHP_VERSION}-fpm"
+fi
+
+echo "Using PHP version ${PHP_VERSION}"
 
 REQUIRED_EXTENSIONS=(curl dom gd iconv libxml pdo simplexml bcmath raphf http)
 MISSING_EXTENSIONS=()
@@ -194,16 +204,15 @@ chown -R "${APP_USER}:${APP_GROUP}" "${APP_BASE_DIR}"
 echo "Validating repository access for ${APP_USER}..."
 if ! su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; git ls-remote --exit-code '${APP_REPO_URL}' HEAD >/dev/null 2>&1"; then
   echo "Cannot access APP_REPO_URL as ${APP_USER}: ${APP_REPO_URL}" >&2
-  echo "For private repositories, configure non-interactive auth and re-run." >&2
-  echo "Recommended: APP_REPO_URL=git@github.com:<org>/<repo>.git with SSH key for ${APP_USER}." >&2
-  echo "Alternative: APP_REPO_URL=https://<user>:<token>@github.com/<org>/<repo>.git" >&2
   exit 1
 fi
 
 echo "Fetching source (${GIT_REF})..."
 su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; git clone '${APP_REPO_URL}' '${NEW_RELEASE}'"
 su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; cd '${NEW_RELEASE}' && git fetch --tags origin '${GIT_REF}' && git checkout -q FETCH_HEAD"
-ensure_release_env_file "${NEW_RELEASE}"
+
+validate_required_ops_env_files "${NEW_RELEASE}"
+copy_ops_env_to_release "${NEW_RELEASE}"
 
 echo "Checking PHP extensions required by composer files..."
 mapfile -t PROJECT_REQUIRED_EXTENSIONS < <(collect_required_project_extensions "${NEW_RELEASE}" | sed '/^$/d')
@@ -225,10 +234,7 @@ if (( ${#PROJECT_REQUIRED_EXTENSIONS[@]} > 0 )); then
 fi
 
 echo "Linking shared files/directories..."
-mkdir -p "${APP_BASE_DIR}/shared"/{env,var/log,var/cache,public/uploads}
-rm -f "${NEW_RELEASE}/env/.env.local"
-ln -s "${APP_BASE_DIR}/shared/env/.env.local" "${NEW_RELEASE}/env/.env.local"
-
+mkdir -p "${APP_BASE_DIR}/shared"/{var/log,var/cache,public/uploads}
 rm -rf "${NEW_RELEASE}/var/log" "${NEW_RELEASE}/var/cache"
 ln -s "${APP_BASE_DIR}/shared/var/log" "${NEW_RELEASE}/var/log"
 ln -s "${APP_BASE_DIR}/shared/var/cache" "${NEW_RELEASE}/var/cache"
@@ -253,10 +259,8 @@ if [[ "${ENABLE_WEB_BUILD}" == "1" ]]; then
   su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && npm ci && npm run web:build"
 fi
 
-if [[ "${RUN_MIGRATIONS}" == "1" ]]; then
-  echo "Running Doctrine migrations..."
-  su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && ${PHP_BIN} bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration --env=${APP_RUNTIME_ENV}"
-fi
+echo "Running Doctrine migrations..."
+su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && ${PHP_BIN} bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration --env=${APP_RUNTIME_ENV}"
 
 echo "Warming Symfony cache..."
 su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && ${PHP_BIN} bin/console cache:clear --env=${APP_RUNTIME_ENV} --no-debug"
