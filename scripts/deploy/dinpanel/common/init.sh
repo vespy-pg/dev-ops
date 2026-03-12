@@ -23,6 +23,7 @@ if [[ "${DEPLOY_ENV_NORMALIZED}" == "prod" ]]; then
 else
   APP_DOMAIN="${DEPLOY_ENV_NORMALIZED}.dinpanel.com"
 fi
+API_DOMAIN="${API_DOMAIN:-api.${APP_DOMAIN}}"
 APP_USER="${APP_USER:-pawel}"
 APP_GROUP="${APP_GROUP:-www-data}"
 APP_BASE_DIR="${APP_BASE_DIR:-/var/www/${APP_NAME}}"
@@ -585,6 +586,7 @@ VHOST_CONF="/etc/apache2/sites-available/${APP_NAME}.conf"
 cat > "${VHOST_CONF}" <<EOF
 <VirtualHost *:80>
     ServerName ${APP_DOMAIN}
+    ServerAlias ${API_DOMAIN}
 
     DocumentRoot ${APP_BASE_DIR}/current/public
 
