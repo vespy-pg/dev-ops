@@ -250,6 +250,7 @@ prepare_ops_env_files() {
       echo "Prepared ${target_file}"
     fi
     chmod 600 "${target_file}"
+    chown "${APP_USER}:${APP_GROUP}" "${target_file}"
   done
 }
 
@@ -383,6 +384,8 @@ copy_ops_env_to_release() {
   local release_dir="$1"
   local release_env_dir="${release_dir}/env"
   local ops_env_file=""
+  local env_example=""
+  local env_target=""
   local -a ops_env_paths=()
 
   mkdir -p "${release_env_dir}"
@@ -390,9 +393,26 @@ copy_ops_env_to_release() {
   ops_env_paths=("${OPS_ENV_DIR}"/*.env)
   shopt -u dotglob nullglob
 
+  if (( ${#ops_env_paths[@]} == 0 )); then
+    echo "No ops env files (*.env) found in ${OPS_ENV_DIR}" >&2
+    exit 1
+  fi
+
   for ops_env_file in "${ops_env_paths[@]}"; do
-    cp "${ops_env_file}" "${release_env_dir}/$(basename "${ops_env_file}")"
+    install -m 600 -o "${APP_USER}" -g "${APP_GROUP}" "${ops_env_file}" "${release_env_dir}/$(basename "${ops_env_file}")"
   done
+
+  while IFS= read -r env_example; do
+    env_target="${env_example%.example}"
+    if [[ ! -f "${release_env_dir}/${env_target}" ]]; then
+      echo "Expected env file missing in release: ${release_env_dir}/${env_target}" >&2
+      exit 1
+    fi
+    if ! su -s /bin/bash - "${APP_USER}" -c "test -r '${release_env_dir}/${env_target}'"; then
+      echo "Env file is not readable by ${APP_USER}: ${release_env_dir}/${env_target}" >&2
+      exit 1
+    fi
+  done < <(find "${release_env_dir}" -maxdepth 1 -type f -name "*.env.example" -printf "%f\n" | sort)
 }
 
 echo "Installing required system packages..."
