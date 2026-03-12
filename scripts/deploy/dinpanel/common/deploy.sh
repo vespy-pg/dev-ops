@@ -161,6 +161,16 @@ read_env_value() {
   sed -n "s/^${key}=//p" "${file}" | head -n1
 }
 
+strip_wrapping_quotes() {
+  local value="$1"
+  if [[ "${value}" =~ ^\".*\"$ ]]; then
+    value="${value:1:${#value}-2}"
+  elif [[ "${value}" =~ ^\'.*\'$ ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+  printf '%s' "${value}"
+}
+
 normalize_name_with_env_suffix() {
   local base="$1"
   local suffix="_${DEPLOY_ENV_NORMALIZED}"
@@ -188,11 +198,14 @@ normalize_db_env_in_ops() {
     fi
   fi
 
-  db_name="$(read_env_value "${ops_db_env}" DB_NAME)"
-  db_user="$(read_env_value "${ops_db_env}" DB_USER)"
-  db_password="$(read_env_value "${ops_db_env}" DB_PASSWORD)"
-  db_host="$(read_env_value "${ops_db_env}" DB_HOST)"
-  db_port="$(read_env_value "${ops_db_env}" DB_PORT)"
+  db_name="$(strip_wrapping_quotes "$(read_env_value "${ops_db_env}" DB_NAME)")"
+  db_user="$(strip_wrapping_quotes "$(read_env_value "${ops_db_env}" DB_USER)")"
+  if [[ -z "${db_user}" ]]; then
+    db_user="$(strip_wrapping_quotes "$(read_env_value "${ops_db_env}" DB_USERNAME)")"
+  fi
+  db_password="$(strip_wrapping_quotes "$(read_env_value "${ops_db_env}" DB_PASSWORD)")"
+  db_host="$(strip_wrapping_quotes "$(read_env_value "${ops_db_env}" DB_HOST)")"
+  db_port="$(strip_wrapping_quotes "$(read_env_value "${ops_db_env}" DB_PORT)")"
 
   if [[ -n "${db_name}" ]]; then
     db_name="$(normalize_name_with_env_suffix "${db_name}")"
@@ -201,6 +214,7 @@ normalize_db_env_in_ops() {
   if [[ -n "${db_user}" ]]; then
     db_user="$(normalize_name_with_env_suffix "${db_user}")"
     set_env_value "${ops_db_env}" DB_USER "${db_user}"
+    set_env_value "${ops_db_env}" DB_USERNAME "${db_user}"
   fi
 
   db_host="${db_host:-127.0.0.1}"

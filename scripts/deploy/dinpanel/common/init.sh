@@ -38,7 +38,8 @@ APACHE_SERVICE="${APACHE_SERVICE:-apache2}"
 DB_HOST="${DB_HOST:-127.0.0.1}"
 DB_PORT="${DB_PORT:-5432}"
 DB_NAME="${DB_NAME:-dinpanel}"
-DB_USER="${DB_USER:-dinpanel_user}"
+DB_USER="${DB_USER:-${DB_USERNAME:-dinpanel_user}}"
+DB_USERNAME="${DB_USERNAME:-${DB_USER}}"
 DB_ENV_FILE="${DB_ENV_FILE:-.api.env}"
 DB_ADMIN_DB="${DB_ADMIN_DB:-postgres}"
 DB_ADMIN_USER="${DB_ADMIN_USER:-postgres}"
@@ -99,6 +100,22 @@ set_env_value() {
   else
     echo "${key}=${value}" >> "${file}"
   fi
+}
+
+read_env_value() {
+  local file="$1"
+  local key="$2"
+  sed -n "s/^${key}=//p" "${file}" | head -n1
+}
+
+strip_wrapping_quotes() {
+  local value="$1"
+  if [[ "${value}" =~ ^\".*\"$ ]]; then
+    value="${value:1:${#value}-2}"
+  elif [[ "${value}" =~ ^\'.*\'$ ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+  printf '%s' "${value}"
 }
 
 prompt_overwrite_default_no() {
@@ -289,8 +306,17 @@ bootstrap_database() {
 
   echo "Using DB env file: ${ops_main_env}"
 
+  if [[ -z "${DB_USER}" ]]; then
+    DB_USER="$(strip_wrapping_quotes "$(read_env_value "${ops_main_env}" "DB_USER")")"
+  fi
+  if [[ -z "${DB_USER}" ]]; then
+    DB_USER="$(strip_wrapping_quotes "$(read_env_value "${ops_main_env}" "DB_USERNAME")")"
+  fi
+  DB_USER="${DB_USER:-dinpanel_user}"
+
   DB_NAME="$(normalize_name_with_env_suffix "${DB_NAME}")"
   DB_USER="$(normalize_name_with_env_suffix "${DB_USER}")"
+  DB_USERNAME="${DB_USER}"
   DB_PASSWORD="$(build_db_password)"
 
   if ! is_safe_sql_identifier "${DB_NAME}" || ! is_safe_sql_identifier "${DB_USER}"; then
@@ -304,6 +330,7 @@ bootstrap_database() {
   set_env_value "${ops_main_env}" "DB_PORT" "${DB_PORT}"
   set_env_value "${ops_main_env}" "DB_NAME" "${DB_NAME}"
   set_env_value "${ops_main_env}" "DB_USER" "${DB_USER}"
+  set_env_value "${ops_main_env}" "DB_USERNAME" "${DB_USER}"
   set_env_value "${ops_main_env}" "DB_PASSWORD" "${DB_PASSWORD}"
   set_env_value "${ops_main_env}" "DATABASE_URL" "pgsql:host=${DB_HOST};port=${DB_PORT};dbname=${DB_NAME};user=${DB_USER};password=${DB_PASSWORD}"
   chmod 600 "${ops_main_env}"
