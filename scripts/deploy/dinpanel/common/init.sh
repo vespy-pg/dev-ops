@@ -115,7 +115,7 @@ apt-get install -y \
   apache2 libapache2-mod-fcgid \
   "php${PHP_VERSION}" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-fpm" \
   "php${PHP_VERSION}-common" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-dom" \
-  "php${PHP_VERSION}-xml" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-intl" \
+  "php${PHP_VERSION}-xml" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-intl" "php${PHP_VERSION}-gd" \
   "php${PHP_VERSION}-zip" "php${PHP_VERSION}-pgsql"
 
 require_php_pkg() {
@@ -130,6 +130,65 @@ require_php_pkg() {
     return 1
   fi
   apt-get install -y "${pkg}"
+}
+
+extension_is_loaded() {
+  local ext="$1"
+  "php${PHP_VERSION}" -m | awk '{print tolower($0)}' | grep -q "^${ext}$"
+}
+
+php_pkg_suffix_for_extension() {
+  local ext="$1"
+  case "${ext}" in
+    pdo_pgsql|pgsql) echo "pgsql" ;;
+    dom|simplexml|xmlreader|xmlwriter) echo "xml" ;;
+    *) echo "${ext}" ;;
+  esac
+}
+
+collect_required_project_extensions() {
+  local project_dir="$1"
+  php -r '
+    $dir = $argv[1];
+    $exts = [];
+    $add = static function ($req) use (&$exts): void {
+      if (!is_array($req)) {
+        return;
+      }
+      foreach ($req as $name => $_constraint) {
+        if (is_string($name) && str_starts_with($name, "ext-")) {
+          $ext = strtolower(substr($name, 4));
+          if ($ext !== "") {
+            $exts[$ext] = true;
+          }
+        }
+      }
+    };
+    foreach (["composer.json", "composer.lock"] as $file) {
+      $path = $dir . "/" . $file;
+      if (!is_file($path)) {
+        continue;
+      }
+      $data = json_decode((string) file_get_contents($path), true);
+      if (!is_array($data)) {
+        continue;
+      }
+      $add($data["require"] ?? null);
+      $add($data["platform"] ?? null);
+      foreach (["packages"] as $section) {
+        if (!isset($data[$section]) || !is_array($data[$section])) {
+          continue;
+        }
+        foreach ($data[$section] as $pkg) {
+          if (is_array($pkg)) {
+            $add($pkg["require"] ?? null);
+          }
+        }
+      }
+    }
+    ksort($exts);
+    echo implode(PHP_EOL, array_keys($exts));
+  ' "${project_dir}"
 }
 
 if ! require_php_pkg "php${PHP_VERSION}-bcmath"; then
@@ -160,7 +219,7 @@ phpenmod -v "${PHP_VERSION}" bcmath || true
 phpenmod -v "${PHP_VERSION}" raphf || true
 phpenmod -v "${PHP_VERSION}" http || true
 
-REQUIRED_EXTENSIONS=(curl dom iconv libxml pdo simplexml bcmath raphf http)
+REQUIRED_EXTENSIONS=(curl dom gd iconv libxml pdo simplexml bcmath raphf http)
 MISSING_EXTENSIONS=()
 for ext in "${REQUIRED_EXTENSIONS[@]}"; do
   if ! "php${PHP_VERSION}" -m | awk '{print tolower($0)}' | grep -q "^${ext}$"; then
@@ -266,6 +325,38 @@ INIT_RELEASE="${APP_BASE_DIR}/releases/init-$(date +%Y%m%d%H%M%S)"
 su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; git clone '${APP_REPO_URL}' '${INIT_RELEASE}'"
 su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; cd '${INIT_RELEASE}' && git fetch --tags origin '${GIT_REF}' && git checkout -q FETCH_HEAD"
 ln -sfn "${APP_BASE_DIR}/shared/env/.env.local" "${INIT_RELEASE}/env/.env.local"
+
+echo "Checking PHP extensions required by composer files..."
+mapfile -t PROJECT_REQUIRED_EXTENSIONS < <(collect_required_project_extensions "${INIT_RELEASE}" | sed '/^$/d')
+if (( ${#PROJECT_REQUIRED_EXTENSIONS[@]} > 0 )); then
+  mapfile -t UNIQUE_SUFFIXES < <(
+    printf '%s\n' "${PROJECT_REQUIRED_EXTENSIONS[@]}" \
+      | while read -r ext; do php_pkg_suffix_for_extension "${ext}"; done \
+      | sort -u
+  )
+  for suffix in "${UNIQUE_SUFFIXES[@]}"; do
+    if extension_is_loaded "${suffix}"; then
+      continue
+    fi
+    require_php_pkg "php${PHP_VERSION}-${suffix}" || true
+    phpenmod -v "${PHP_VERSION}" "${suffix}" >/dev/null 2>&1 || true
+  done
+  MISSING_EXTENSIONS=()
+  for ext in "${PROJECT_REQUIRED_EXTENSIONS[@]}"; do
+    if ! extension_is_loaded "${ext}"; then
+      MISSING_EXTENSIONS+=("${ext}")
+    fi
+  done
+  if (( ${#MISSING_EXTENSIONS[@]} > 0 )); then
+    if [[ "${ALLOW_MISSING_EXTENSIONS}" != "1" ]]; then
+      echo "Missing project-required PHP extensions for php${PHP_VERSION}: ${MISSING_EXTENSIONS[*]}" >&2
+      echo "Install them and re-run. Composer will fail without required extensions." >&2
+      exit 1
+    fi
+    echo "Warning: missing project-required PHP extensions for php${PHP_VERSION}: ${MISSING_EXTENSIONS[*]}"
+    echo "Warning: continuing because ALLOW_MISSING_EXTENSIONS=1 (temporary pre-prod mode)."
+  fi
+fi
 
 if [[ ! -f "${APP_BASE_DIR}/shared/env/.env.local" ]]; then
   if [[ -f "${INIT_RELEASE}/env/.env.example" ]]; then

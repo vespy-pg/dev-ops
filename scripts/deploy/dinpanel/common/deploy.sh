@@ -96,10 +96,60 @@ fi
 
 echo "Using PHP version ${PHP_VERSION}"
 
-REQUIRED_EXTENSIONS=(curl dom iconv libxml pdo simplexml bcmath raphf http)
+extension_is_loaded() {
+  local ext="$1"
+  "${PHP_BIN}" -m | awk '{print tolower($0)}' | grep -q "^${ext}$"
+}
+
+collect_required_project_extensions() {
+  local project_dir="$1"
+  php -r '
+    $dir = $argv[1];
+    $exts = [];
+    $add = static function ($req) use (&$exts): void {
+      if (!is_array($req)) {
+        return;
+      }
+      foreach ($req as $name => $_constraint) {
+        if (is_string($name) && str_starts_with($name, "ext-")) {
+          $ext = strtolower(substr($name, 4));
+          if ($ext !== "") {
+            $exts[$ext] = true;
+          }
+        }
+      }
+    };
+    foreach (["composer.json", "composer.lock"] as $file) {
+      $path = $dir . "/" . $file;
+      if (!is_file($path)) {
+        continue;
+      }
+      $data = json_decode((string) file_get_contents($path), true);
+      if (!is_array($data)) {
+        continue;
+      }
+      $add($data["require"] ?? null);
+      $add($data["platform"] ?? null);
+      foreach (["packages"] as $section) {
+        if (!isset($data[$section]) || !is_array($data[$section])) {
+          continue;
+        }
+        foreach ($data[$section] as $pkg) {
+          if (is_array($pkg)) {
+            $add($pkg["require"] ?? null);
+          }
+        }
+      }
+    }
+    ksort($exts);
+    echo implode(PHP_EOL, array_keys($exts));
+  ' "${project_dir}"
+}
+
+REQUIRED_EXTENSIONS=(curl dom gd iconv libxml pdo simplexml bcmath raphf http)
 MISSING_EXTENSIONS=()
 for ext in "${REQUIRED_EXTENSIONS[@]}"; do
-  if ! "${PHP_BIN}" -m | awk '{print tolower($0)}' | grep -q "^${ext}$"; then
+  if ! extension_is_loaded "${ext}"; then
     MISSING_EXTENSIONS+=("${ext}")
   fi
 done
@@ -132,6 +182,25 @@ fi
 echo "Fetching source (${GIT_REF})..."
 su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; git clone '${APP_REPO_URL}' '${NEW_RELEASE}'"
 su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; cd '${NEW_RELEASE}' && git fetch --tags origin '${GIT_REF}' && git checkout -q FETCH_HEAD"
+
+echo "Checking PHP extensions required by composer files..."
+mapfile -t PROJECT_REQUIRED_EXTENSIONS < <(collect_required_project_extensions "${NEW_RELEASE}" | sed '/^$/d')
+if (( ${#PROJECT_REQUIRED_EXTENSIONS[@]} > 0 )); then
+  MISSING_EXTENSIONS=()
+  for ext in "${PROJECT_REQUIRED_EXTENSIONS[@]}"; do
+    if ! extension_is_loaded "${ext}"; then
+      MISSING_EXTENSIONS+=("${ext}")
+    fi
+  done
+  if (( ${#MISSING_EXTENSIONS[@]} > 0 )); then
+    if [[ "${ALLOW_MISSING_EXTENSIONS}" != "1" ]]; then
+      echo "Missing project-required PHP extensions for php${PHP_VERSION}: ${MISSING_EXTENSIONS[*]}" >&2
+      exit 1
+    fi
+    echo "Warning: missing project-required PHP extensions for php${PHP_VERSION}: ${MISSING_EXTENSIONS[*]}"
+    echo "Warning: continuing because ALLOW_MISSING_EXTENSIONS=1 (temporary pre-prod mode)."
+  fi
+fi
 
 echo "Linking shared files/directories..."
 mkdir -p "${APP_BASE_DIR}/shared"/{env,var/log,var/cache,public/uploads}
