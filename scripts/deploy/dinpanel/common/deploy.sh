@@ -23,7 +23,7 @@ fi
 APP_USER="${APP_USER:-pawel}"
 APP_GROUP="${APP_GROUP:-www-data}"
 APP_BASE_DIR="${APP_BASE_DIR:-/var/www/${APP_NAME}}"
-APP_REPO_URL="${APP_REPO_URL:-https://github.com/vespy-pg/DINPanel.git}"
+APP_REPO_URL="${APP_REPO_URL:-git@github.com:vespy-pg/DINPanel.git}"
 GIT_REF="${GIT_REF:-main}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 APP_RUNTIME_ENV="${APP_RUNTIME_ENV:-prod}"
