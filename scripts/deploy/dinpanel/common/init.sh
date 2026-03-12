@@ -39,9 +39,13 @@ DB_HOST="${DB_HOST:-127.0.0.1}"
 DB_PORT="${DB_PORT:-5432}"
 DB_NAME="${DB_NAME:-dinpanel}"
 DB_USER="${DB_USER:-dinpanel_user}"
+DB_ENV_FILE="${DB_ENV_FILE:-.api.env}"
 DB_ADMIN_DB="${DB_ADMIN_DB:-postgres}"
 DB_ADMIN_USER="${DB_ADMIN_USER:-postgres}"
 DB_ADMIN_PASSWORD="${DB_ADMIN_PASSWORD:-}"
+DB_OWNER="${DB_OWNER:-${DB_ADMIN_USER}}"
+DB_SCHEMA_NAME="${DB_SCHEMA_NAME:-app}"
+DB_SCHEMA_OWNER="${DB_SCHEMA_OWNER:-${DB_ADMIN_USER}}"
 
 ENABLE_DB_BOOTSTRAP="${ENABLE_DB_BOOTSTRAP:-1}" # 1 = create db/user and run sql/[!0_]*
 ENABLE_WEB_BUILD="${ENABLE_WEB_BUILD:-0}"       # 1 = install node/npm and build web
@@ -251,17 +255,34 @@ prepare_ops_env_files() {
 
 bootstrap_database() {
   local release_dir="$1"
-  local ops_main_env="${OPS_ENV_DIR}/.env"
-  local db_password_sql=""
-  local db_name_sql=""
-  local db_user_sql=""
+  local ops_main_env="${OPS_ENV_DIR}/${DB_ENV_FILE}"
   local sql_file=""
   local -a sql_files=()
+  local -a phase1_sql_files=()
+  local -a phase2_sql_files=()
+  local -a ops_env_files=()
 
   if [[ ! -f "${ops_main_env}" ]]; then
-    echo "Missing ${ops_main_env}. Cannot bootstrap database." >&2
+    if [[ -f "${OPS_ENV_DIR}/.env" ]]; then
+      ops_main_env="${OPS_ENV_DIR}/.env"
+    elif [[ -f "${OPS_ENV_DIR}/.api.env" ]]; then
+      ops_main_env="${OPS_ENV_DIR}/.api.env"
+    else
+      shopt -s dotglob nullglob
+      ops_env_files=("${OPS_ENV_DIR}"/*.env)
+      shopt -u dotglob nullglob
+      if (( ${#ops_env_files[@]} > 0 )); then
+        ops_main_env="${ops_env_files[0]}"
+      fi
+    fi
+  fi
+
+  if [[ ! -f "${ops_main_env}" ]]; then
+    echo "Missing DB env target (${OPS_ENV_DIR}/${DB_ENV_FILE}) and no fallback *.env found. Cannot bootstrap database." >&2
     exit 1
   fi
+
+  echo "Using DB env file: ${ops_main_env}"
 
   DB_NAME="$(normalize_name_with_env_suffix "${DB_NAME}")"
   DB_USER="$(normalize_name_with_env_suffix "${DB_USER}")"
@@ -282,32 +303,51 @@ bootstrap_database() {
   set_env_value "${ops_main_env}" "DATABASE_URL" "pgsql:host=${DB_HOST};port=${DB_PORT};dbname=${DB_NAME};user=${DB_USER};password=${DB_PASSWORD}"
   chmod 600 "${ops_main_env}"
 
-  db_password_sql="${DB_PASSWORD//\'/\'\'}"
-  db_name_sql="${DB_NAME//\'/\'\'}"
-  db_user_sql="${DB_USER//\'/\'\'}"
-
-  echo "Creating/updating PostgreSQL role and database..."
-  PGPASSWORD="${DB_ADMIN_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_ADMIN_USER}" -d "${DB_ADMIN_DB}" -v ON_ERROR_STOP=1 <<SQL
-DO \$\$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${db_user_sql}') THEN
-    EXECUTE 'ALTER ROLE "${DB_USER}" LOGIN PASSWORD ''${db_password_sql}''';
-  ELSE
-    EXECUTE 'CREATE ROLE "${DB_USER}" LOGIN PASSWORD ''${db_password_sql}''';
-  END IF;
-END
-\$\$;
-SQL
-
-  if ! PGPASSWORD="${DB_ADMIN_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_ADMIN_USER}" -d "${DB_ADMIN_DB}" -Atqc "SELECT 1 FROM pg_database WHERE datname='${db_name_sql}'" | grep -q '^1$'; then
-    PGPASSWORD="${DB_ADMIN_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_ADMIN_USER}" -d "${DB_ADMIN_DB}" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"${DB_NAME}\" OWNER \"${DB_USER}\""
+  if ! is_safe_sql_identifier "${DB_OWNER}" || ! is_safe_sql_identifier "${DB_SCHEMA_NAME}" || ! is_safe_sql_identifier "${DB_SCHEMA_OWNER}"; then
+    echo "Unsafe DB_OWNER, DB_SCHEMA_NAME or DB_SCHEMA_OWNER." >&2
+    exit 1
   fi
-  PGPASSWORD="${DB_ADMIN_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_ADMIN_USER}" -d "${DB_ADMIN_DB}" -v ON_ERROR_STOP=1 -c "GRANT ALL PRIVILEGES ON DATABASE \"${DB_NAME}\" TO \"${DB_USER}\""
+
+  if [[ ! -d "${release_dir}/sql" ]]; then
+    echo "No sql directory found in ${release_dir}; skipping DB SQL bootstrap."
+    return 0
+  fi
 
   mapfile -t sql_files < <(find "${release_dir}/sql" -maxdepth 1 -type f -name "*.sql" ! -name "0_*" -printf "%f\n" | sort)
   for sql_file in "${sql_files[@]}"; do
-    echo "Running sql/${sql_file}"
-    PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -v ON_ERROR_STOP=1 -f "${release_dir}/sql/${sql_file}"
+    if [[ "${sql_file}" == 1_* ]]; then
+      phase1_sql_files+=("${sql_file}")
+    else
+      phase2_sql_files+=("${sql_file}")
+    fi
+  done
+
+  for sql_file in "${phase1_sql_files[@]}"; do
+    echo "Running admin sql/${sql_file}"
+    PGPASSWORD="${DB_ADMIN_PASSWORD}" psql \
+      -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_ADMIN_USER}" -d "${DB_ADMIN_DB}" \
+      -v ON_ERROR_STOP=1 \
+      -v db_name="${DB_NAME}" \
+      -v db_user="${DB_USER}" \
+      -v db_password="${DB_PASSWORD}" \
+      -v db_owner="${DB_OWNER}" \
+      -v schema_name="${DB_SCHEMA_NAME}" \
+      -v schema_owner="${DB_SCHEMA_OWNER}" \
+      -f "${release_dir}/sql/${sql_file}"
+  done
+
+  for sql_file in "${phase2_sql_files[@]}"; do
+    echo "Running app sql/${sql_file}"
+    PGPASSWORD="${DB_PASSWORD}" psql \
+      -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" \
+      -v ON_ERROR_STOP=1 \
+      -v db_name="${DB_NAME}" \
+      -v db_user="${DB_USER}" \
+      -v db_password="${DB_PASSWORD}" \
+      -v db_owner="${DB_OWNER}" \
+      -v schema_name="${DB_SCHEMA_NAME}" \
+      -v schema_owner="${DB_SCHEMA_OWNER}" \
+      -f "${release_dir}/sql/${sql_file}"
   done
 }
 
