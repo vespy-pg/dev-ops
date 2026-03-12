@@ -140,6 +140,14 @@ if ! require_php_pkg "php${PHP_VERSION}-bcmath"; then
   echo "Warning: bcmath package unavailable for PHP ${PHP_VERSION}; continuing because ALLOW_MISSING_EXTENSIONS=1"
 fi
 
+if ! require_php_pkg "php${PHP_VERSION}-raphf"; then
+  if [[ "${ALLOW_MISSING_EXTENSIONS}" != "1" ]]; then
+    echo "Unable to install raphf extension package for PHP ${PHP_VERSION}." >&2
+    exit 1
+  fi
+  echo "Warning: raphf package unavailable for PHP ${PHP_VERSION}; continuing because ALLOW_MISSING_EXTENSIONS=1"
+fi
+
 if ! require_php_pkg "php${PHP_VERSION}-http"; then
   if [[ "${ALLOW_MISSING_EXTENSIONS}" != "1" ]]; then
     echo "Unable to install http extension package for PHP ${PHP_VERSION}." >&2
@@ -149,9 +157,10 @@ if ! require_php_pkg "php${PHP_VERSION}-http"; then
 fi
 
 phpenmod -v "${PHP_VERSION}" bcmath || true
+phpenmod -v "${PHP_VERSION}" raphf || true
 phpenmod -v "${PHP_VERSION}" http || true
 
-REQUIRED_EXTENSIONS=(curl dom iconv libxml pdo simplexml bcmath http)
+REQUIRED_EXTENSIONS=(curl dom iconv libxml pdo simplexml bcmath raphf http)
 MISSING_EXTENSIONS=()
 for ext in "${REQUIRED_EXTENSIONS[@]}"; do
   if ! "php${PHP_VERSION}" -m | awk '{print tolower($0)}' | grep -q "^${ext}$"; then

@@ -96,7 +96,7 @@ fi
 
 echo "Using PHP version ${PHP_VERSION}"
 
-REQUIRED_EXTENSIONS=(curl dom iconv libxml pdo simplexml bcmath http)
+REQUIRED_EXTENSIONS=(curl dom iconv libxml pdo simplexml bcmath raphf http)
 MISSING_EXTENSIONS=()
 for ext in "${REQUIRED_EXTENSIONS[@]}"; do
   if ! "${PHP_BIN}" -m | awk '{print tolower($0)}' | grep -q "^${ext}$"; then
