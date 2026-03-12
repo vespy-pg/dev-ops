@@ -191,6 +191,27 @@ collect_required_project_extensions() {
   ' "${project_dir}"
 }
 
+ensure_release_env_file() {
+  local release_dir="$1"
+  local env_dir="${release_dir}/env"
+  local env_file="${env_dir}/.env"
+  local env_example="${env_dir}/.env.example"
+
+  mkdir -p "${env_dir}"
+  if [[ -f "${env_file}" ]]; then
+    return 0
+  fi
+
+  if [[ -f "${env_example}" ]]; then
+    cp "${env_example}" "${env_file}"
+  else
+    cat > "${env_file}" <<EOF
+APP_ENV=${APP_RUNTIME_ENV}
+APP_DEBUG=0
+EOF
+  fi
+}
+
 if ! require_php_pkg "php${PHP_VERSION}-bcmath"; then
   if [[ "${ALLOW_MISSING_EXTENSIONS}" != "1" ]]; then
     echo "Unable to install bcmath extension package for PHP ${PHP_VERSION}." >&2
@@ -324,6 +345,7 @@ echo "Preparing initial release source checkout..."
 INIT_RELEASE="${APP_BASE_DIR}/releases/init-$(date +%Y%m%d%H%M%S)"
 su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; git clone '${APP_REPO_URL}' '${INIT_RELEASE}'"
 su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; cd '${INIT_RELEASE}' && git fetch --tags origin '${GIT_REF}' && git checkout -q FETCH_HEAD"
+ensure_release_env_file "${INIT_RELEASE}"
 ln -sfn "${APP_BASE_DIR}/shared/env/.env.local" "${INIT_RELEASE}/env/.env.local"
 
 echo "Checking PHP extensions required by composer files..."
