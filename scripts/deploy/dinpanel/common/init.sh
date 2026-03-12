@@ -217,6 +217,7 @@ prepare_ops_env_files() {
   local target_name=""
   local source_file=""
   local target_file=""
+  local -a example_paths=()
 
   mkdir -p "${OPS_ENV_DIR}"
   touch "${gitignore_file}"
@@ -224,16 +225,18 @@ prepare_ops_env_files() {
     echo "*.env" >> "${gitignore_file}"
   fi
 
-  mapfile -t EXAMPLE_FILES < <(find "${release_env_dir}" -maxdepth 1 -type f -name "*.env.example" -printf "%f\n" | sort)
+  shopt -s dotglob nullglob
+  example_paths=("${release_env_dir}"/*.env.example)
+  shopt -u dotglob nullglob
 
-  if (( ${#EXAMPLE_FILES[@]} == 0 )); then
+  if (( ${#example_paths[@]} == 0 )); then
     echo "No *.env.example files found in ${release_env_dir}" >&2
     exit 1
   fi
 
-  for example_name in "${EXAMPLE_FILES[@]}"; do
+  for source_file in "${example_paths[@]}"; do
+    example_name="$(basename "${source_file}")"
     target_name="${example_name%.example}"
-    source_file="${release_env_dir}/${example_name}"
     target_file="${OPS_ENV_DIR}/${target_name}"
 
     if [[ -f "${target_file}" ]] && ! prompt_overwrite_default_no "${target_file}"; then
@@ -312,11 +315,16 @@ copy_ops_env_to_release() {
   local release_dir="$1"
   local release_env_dir="${release_dir}/env"
   local ops_env_file=""
+  local -a ops_env_paths=()
 
   mkdir -p "${release_env_dir}"
-  while IFS= read -r -d '' ops_env_file; do
+  shopt -s dotglob nullglob
+  ops_env_paths=("${OPS_ENV_DIR}"/*.env)
+  shopt -u dotglob nullglob
+
+  for ops_env_file in "${ops_env_paths[@]}"; do
     cp "${ops_env_file}" "${release_env_dir}/$(basename "${ops_env_file}")"
-  done < <(find "${OPS_ENV_DIR}" -maxdepth 1 -type f -name "*.env" -print0 | sort -z)
+  done
 }
 
 echo "Installing required system packages..."

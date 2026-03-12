@@ -143,10 +143,15 @@ validate_required_ops_env_files() {
   local example_file=""
   local required_target=""
   local missing=()
+  local -a example_paths=()
 
-  mapfile -t EXAMPLE_FILES < <(find "${release_env_dir}" -maxdepth 1 -type f -name "*.env.example" -printf "%f\n" | sort)
-  for example_file in "${EXAMPLE_FILES[@]}"; do
-    required_target="${example_file%.example}"
+  shopt -s dotglob nullglob
+  example_paths=("${release_env_dir}"/*.env.example)
+  shopt -u dotglob nullglob
+
+  for example_file in "${example_paths[@]}"; do
+    required_target="$(basename "${example_file}")"
+    required_target="${required_target%.example}"
     if [[ ! -f "${OPS_ENV_DIR}/${required_target}" ]]; then
       missing+=("${required_target}")
     fi
@@ -162,11 +167,16 @@ copy_ops_env_to_release() {
   local release_dir="$1"
   local release_env_dir="${release_dir}/env"
   local ops_env_file=""
+  local -a ops_env_paths=()
 
   mkdir -p "${release_env_dir}"
-  while IFS= read -r -d '' ops_env_file; do
+  shopt -s dotglob nullglob
+  ops_env_paths=("${OPS_ENV_DIR}"/*.env)
+  shopt -u dotglob nullglob
+
+  for ops_env_file in "${ops_env_paths[@]}"; do
     cp "${ops_env_file}" "${release_env_dir}/$(basename "${ops_env_file}")"
-  done < <(find "${OPS_ENV_DIR}" -maxdepth 1 -type f -name "*.env" -print0 | sort -z)
+  done
 }
 
 PHP_VERSION="$(resolve_php_version "${PHP_VERSION}")"
