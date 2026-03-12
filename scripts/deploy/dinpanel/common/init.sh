@@ -20,7 +20,7 @@ if [[ "${DEPLOY_ENV_NORMALIZED}" == "prod" ]]; then
 else
   APP_DOMAIN="${DEPLOY_ENV_NORMALIZED}.dinpanel.com"
 fi
-APP_USER="${APP_USER:-dinpanel}"
+APP_USER="${APP_USER:-pawel}"
 APP_GROUP="${APP_GROUP:-www-data}"
 APP_BASE_DIR="${APP_BASE_DIR:-/var/www/${APP_NAME}}"
 APP_REPO_URL="${APP_REPO_URL:-https://github.com/vespy-pg/DINPanel.git}"
@@ -252,10 +252,19 @@ EOF
 
 a2ensite "${APP_NAME}.conf"
 
+echo "Validating repository access for ${APP_USER}..."
+if ! su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; git ls-remote --exit-code '${APP_REPO_URL}' HEAD >/dev/null 2>&1"; then
+  echo "Cannot access APP_REPO_URL as ${APP_USER}: ${APP_REPO_URL}" >&2
+  echo "For private repositories, configure non-interactive auth and re-run." >&2
+  echo "Recommended: APP_REPO_URL=git@github.com:<org>/<repo>.git with SSH key for ${APP_USER}." >&2
+  echo "Alternative: APP_REPO_URL=https://<user>:<token>@github.com/<org>/<repo>.git" >&2
+  exit 1
+fi
+
 echo "Preparing initial release source checkout..."
 INIT_RELEASE="${APP_BASE_DIR}/releases/init-$(date +%Y%m%d%H%M%S)"
-su -s /bin/bash - "${APP_USER}" -c "git clone '${APP_REPO_URL}' '${INIT_RELEASE}'"
-su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && git fetch --tags origin '${GIT_REF}' && git checkout -q FETCH_HEAD"
+su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; git clone '${APP_REPO_URL}' '${INIT_RELEASE}'"
+su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; cd '${INIT_RELEASE}' && git fetch --tags origin '${GIT_REF}' && git checkout -q FETCH_HEAD"
 ln -sfn "${APP_BASE_DIR}/shared/env/.env.local" "${INIT_RELEASE}/env/.env.local"
 
 if [[ ! -f "${APP_BASE_DIR}/shared/env/.env.local" ]]; then
