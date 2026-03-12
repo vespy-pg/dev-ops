@@ -35,7 +35,7 @@ PHP_VERSION="${PHP_VERSION:-auto}"
 PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-}"
 APACHE_SERVICE="${APACHE_SERVICE:-apache2}"
 
-ENABLE_WEB_BUILD="${ENABLE_WEB_BUILD:-0}"
+ENABLE_WEB_BUILD="${ENABLE_WEB_BUILD:-1}"
 ALLOW_MISSING_EXTENSIONS="${ALLOW_MISSING_EXTENSIONS:-0}" # 1 = pre-prod fallback
 
 if [[ "${EUID}" -ne 0 ]]; then
@@ -221,6 +221,12 @@ if (( ${#MISSING_EXTENSIONS[@]} > 0 )); then
   fi
   echo "Warning: missing PHP extensions for php${PHP_VERSION}: ${MISSING_EXTENSIONS[*]}"
   echo "Warning: continuing because ALLOW_MISSING_EXTENSIONS=1 (temporary pre-prod mode)."
+fi
+
+if [[ "${ENABLE_WEB_BUILD}" == "1" ]] && ! command -v npm >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y nodejs npm
 fi
 
 TIMESTAMP="$(date +%Y%m%d%H%M%S)"
