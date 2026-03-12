@@ -28,8 +28,8 @@ GIT_REF="${GIT_REF:-main}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 APP_RUNTIME_ENV="${APP_RUNTIME_ENV:-prod}"
 
-PHP_VERSION="${PHP_VERSION:-8.2}"
-PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-php${PHP_VERSION}-fpm}"
+PHP_VERSION="${PHP_VERSION:-auto}"
+PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-}"
 APACHE_SERVICE="${APACHE_SERVICE:-apache2}"
 
 RUN_MIGRATIONS="${RUN_MIGRATIONS:-0}" # 1 = run doctrine:migrations:migrate
@@ -56,10 +56,50 @@ if [[ ! -f "${APP_BASE_DIR}/shared/env/.env.local" ]]; then
   exit 1
 fi
 
+resolve_php_version() {
+  local requested="$1"
+  local candidates=(8.4 8.3 8.2 8.1 8.0)
+  local detected=""
+  local candidate=""
+
+  if [[ "${requested}" != "auto" ]]; then
+    if command -v "php${requested}" >/dev/null 2>&1; then
+      echo "${requested}"
+      return 0
+    fi
+    echo "Requested PHP_VERSION=${requested}, but binary php${requested} is unavailable." >&2
+    echo "Set PHP_VERSION=auto or install php${requested}." >&2
+    return 1
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    if command -v "php${candidate}" >/dev/null 2>&1; then
+      detected="${candidate}"
+      break
+    fi
+  done
+
+  if [[ -z "${detected}" ]]; then
+    echo "Unable to detect an installed PHP CLI binary (checked: ${candidates[*]})." >&2
+    echo "Set PHP_VERSION explicitly and ensure php<version> is installed." >&2
+    return 1
+  fi
+
+  echo "${detected}"
+}
+
+PHP_VERSION="$(resolve_php_version "${PHP_VERSION}")"
+PHP_BIN="php${PHP_VERSION}"
+if [[ -z "${PHP_FPM_SERVICE}" ]]; then
+  PHP_FPM_SERVICE="php${PHP_VERSION}-fpm"
+fi
+
+echo "Using PHP version ${PHP_VERSION}"
+
 REQUIRED_EXTENSIONS=(curl dom iconv libxml pdo simplexml bcmath http)
 MISSING_EXTENSIONS=()
 for ext in "${REQUIRED_EXTENSIONS[@]}"; do
-  if ! "php${PHP_VERSION}" -m | awk '{print tolower($0)}' | grep -q "^${ext}$"; then
+  if ! "${PHP_BIN}" -m | awk '{print tolower($0)}' | grep -q "^${ext}$"; then
     MISSING_EXTENSIONS+=("${ext}")
   fi
 done
@@ -115,15 +155,15 @@ fi
 
 if [[ "${RUN_MIGRATIONS}" == "1" ]]; then
   echo "Running Doctrine migrations..."
-  su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && php${PHP_VERSION} bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration --env=${APP_RUNTIME_ENV}"
+  su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && ${PHP_BIN} bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration --env=${APP_RUNTIME_ENV}"
 fi
 
 echo "Warming Symfony cache..."
-su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && php${PHP_VERSION} bin/console cache:clear --env=${APP_RUNTIME_ENV} --no-debug"
+su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && ${PHP_BIN} bin/console cache:clear --env=${APP_RUNTIME_ENV} --no-debug"
 
 echo "Sanity checks..."
-su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && php${PHP_VERSION} bin/console lint:container --env=${APP_RUNTIME_ENV}"
-su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && php${PHP_VERSION} bin/console about --env=${APP_RUNTIME_ENV} >/dev/null"
+su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && ${PHP_BIN} bin/console lint:container --env=${APP_RUNTIME_ENV}"
+su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && ${PHP_BIN} bin/console about --env=${APP_RUNTIME_ENV} >/dev/null"
 
 echo "Switching current symlink..."
 ln -sfn "${NEW_RELEASE}" "${APP_BASE_DIR}/current"

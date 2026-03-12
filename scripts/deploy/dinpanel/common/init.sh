@@ -27,9 +27,9 @@ APP_REPO_URL="${APP_REPO_URL:-https://github.com/vespy-pg/DINPanel.git}"
 GIT_REF="${GIT_REF:-main}"
 APP_RUNTIME_ENV="${APP_RUNTIME_ENV:-prod}"
 
-PHP_VERSION="${PHP_VERSION:-8.2}"
-PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-php${PHP_VERSION}-fpm}"
-PHP_FPM_SOCK="${PHP_FPM_SOCK:-/run/php/${PHP_FPM_SERVICE}-${APP_NAME}.sock}"
+PHP_VERSION="${PHP_VERSION:-auto}"
+PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-}"
+PHP_FPM_SOCK="${PHP_FPM_SOCK:-}"
 APACHE_SERVICE="${APACHE_SERVICE:-apache2}"
 
 DB_HOST="${DB_HOST:-127.0.0.1}"
@@ -68,6 +68,48 @@ fi
 echo "Installing required system packages..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
+
+resolve_php_version() {
+  local requested="$1"
+  local candidates=(8.4 8.3 8.2 8.1 8.0)
+  local detected=""
+
+  if [[ "${requested}" != "auto" ]]; then
+    if apt-cache show "php${requested}-cli" >/dev/null 2>&1 && apt-cache show "php${requested}-fpm" >/dev/null 2>&1; then
+      echo "${requested}"
+      return 0
+    fi
+    echo "Requested PHP_VERSION=${requested}, but php${requested}-cli/php${requested}-fpm are unavailable in apt." >&2
+    echo "Either set PHP_VERSION=auto or enable a repository that provides PHP ${requested} packages." >&2
+    return 1
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    if apt-cache show "php${candidate}-cli" >/dev/null 2>&1 && apt-cache show "php${candidate}-fpm" >/dev/null 2>&1; then
+      detected="${candidate}"
+      break
+    fi
+  done
+
+  if [[ -z "${detected}" ]]; then
+    echo "Unable to detect an installable PHP version from apt (checked: ${candidates[*]})." >&2
+    echo "Set PHP_VERSION explicitly and ensure apt repositories provide php<version>-cli and php<version>-fpm." >&2
+    return 1
+  fi
+
+  echo "${detected}"
+}
+
+PHP_VERSION="$(resolve_php_version "${PHP_VERSION}")"
+if [[ -z "${PHP_FPM_SERVICE}" ]]; then
+  PHP_FPM_SERVICE="php${PHP_VERSION}-fpm"
+fi
+if [[ -z "${PHP_FPM_SOCK}" ]]; then
+  PHP_FPM_SOCK="/run/php/${PHP_FPM_SERVICE}-${APP_NAME}.sock"
+fi
+
+echo "Using PHP version ${PHP_VERSION}"
+
 apt-get install -y \
   git curl unzip ca-certificates lsb-release apt-transport-https software-properties-common gnupg2 \
   apache2 libapache2-mod-fcgid \
