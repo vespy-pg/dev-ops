@@ -619,6 +619,7 @@ cat > "${VHOST_CONF}" <<EOF
 </VirtualHost>
 EOF
 a2ensite "${APP_NAME}.conf"
+a2dissite 000-default >/dev/null 2>&1 || true
 
 echo "Validating repository access for ${APP_USER}..."
 if ! su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; git ls-remote --exit-code '${APP_REPO_URL}' HEAD >/dev/null 2>&1"; then
@@ -659,7 +660,7 @@ echo "Copying env files into release..."
 copy_ops_env_to_release "${INIT_RELEASE}"
 
 echo "Installing PHP dependencies..."
-su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && composer install --no-dev --optimize-autoloader --classmap-authoritative"
+su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && APP_ENV='${APP_RUNTIME_ENV}' APP_DEBUG=0 composer install --no-dev --optimize-autoloader --classmap-authoritative"
 
 if [[ "${ENABLE_WEB_BUILD}" == "1" ]]; then
   echo "Installing and building SPA..."
@@ -667,7 +668,7 @@ if [[ "${ENABLE_WEB_BUILD}" == "1" ]]; then
 fi
 
 echo "Clearing Symfony cache..."
-su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && php${PHP_VERSION} bin/console cache:clear --env=${APP_RUNTIME_ENV} --no-debug"
+su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && APP_ENV='${APP_RUNTIME_ENV}' APP_DEBUG=0 php${PHP_VERSION} bin/console cache:clear --env=${APP_RUNTIME_ENV} --no-debug"
 
 ln -sfn "${INIT_RELEASE}" "${APP_BASE_DIR}/current"
 chown -h "${APP_USER}:${APP_GROUP}" "${APP_BASE_DIR}/current"

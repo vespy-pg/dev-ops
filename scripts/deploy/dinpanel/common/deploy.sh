@@ -23,6 +23,7 @@ if [[ "${DEPLOY_ENV_NORMALIZED}" == "prod" ]]; then
 else
   APP_DOMAIN="${DEPLOY_ENV_NORMALIZED}.dinpanel.com"
 fi
+API_DOMAIN="${API_DOMAIN:-api.${APP_DOMAIN}}"
 APP_USER="${APP_USER:-pawel}"
 APP_GROUP="${APP_GROUP:-www-data}"
 APP_BASE_DIR="${APP_BASE_DIR:-/var/www/${APP_NAME}}"
@@ -332,6 +333,48 @@ PHP_BIN="php${PHP_VERSION}"
 if [[ -z "${PHP_FPM_SERVICE}" ]]; then
   PHP_FPM_SERVICE="php${PHP_VERSION}-fpm"
 fi
+PHP_FPM_SOCK="${PHP_FPM_SOCK:-/run/php/${PHP_FPM_SERVICE}-${APP_NAME}.sock}"
+
+configure_apache_vhost() {
+  local vhost_conf="/etc/apache2/sites-available/${APP_NAME}.conf"
+  cat > "${vhost_conf}" <<EOF
+<VirtualHost *:80>
+    ServerName ${APP_DOMAIN}
+
+    DocumentRoot ${APP_BASE_DIR}/current/web/dist/spa
+
+    <Directory ${APP_BASE_DIR}/current/web/dist/spa>
+        AllowOverride None
+        Require all granted
+        FallbackResource /index.html
+    </Directory>
+
+    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_error.log
+    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_access.log combined
+</VirtualHost>
+
+<VirtualHost *:80>
+    ServerName ${API_DOMAIN}
+
+    DocumentRoot ${APP_BASE_DIR}/current/public
+
+    <Directory ${APP_BASE_DIR}/current/public>
+        AllowOverride All
+        Require all granted
+        FallbackResource /index.php
+    </Directory>
+
+    <FilesMatch \.php$>
+        SetHandler "proxy:unix:${PHP_FPM_SOCK}|fcgi://localhost/"
+    </FilesMatch>
+
+    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_api_error.log
+    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_api_access.log combined
+</VirtualHost>
+EOF
+  a2ensite "${APP_NAME}.conf" >/dev/null
+  a2dissite 000-default >/dev/null 2>&1 || true
+}
 
 echo "Using PHP version ${PHP_VERSION}"
 
@@ -415,7 +458,7 @@ if [[ "${ALLOW_MISSING_EXTENSIONS}" == "1" ]] && (( ${#MISSING_EXTENSIONS[@]} > 
     COMPOSER_INSTALL_FLAGS+=" --ignore-platform-req=ext-${ext}"
   done
 fi
-su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && composer install ${COMPOSER_INSTALL_FLAGS}"
+su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && APP_ENV='${APP_RUNTIME_ENV}' APP_DEBUG=0 composer install ${COMPOSER_INSTALL_FLAGS}"
 
 if [[ "${ENABLE_WEB_BUILD}" == "1" ]]; then
   echo "Building SPA..."
@@ -423,20 +466,21 @@ if [[ "${ENABLE_WEB_BUILD}" == "1" ]]; then
 fi
 
 echo "Running Doctrine migrations..."
-su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && ${PHP_BIN} bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration --env=${APP_RUNTIME_ENV}"
+su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && APP_ENV='${APP_RUNTIME_ENV}' APP_DEBUG=0 ${PHP_BIN} bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration --env=${APP_RUNTIME_ENV}"
 
 echo "Warming Symfony cache..."
-su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && ${PHP_BIN} bin/console cache:clear --env=${APP_RUNTIME_ENV} --no-debug"
+su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && APP_ENV='${APP_RUNTIME_ENV}' APP_DEBUG=0 ${PHP_BIN} bin/console cache:clear --env=${APP_RUNTIME_ENV} --no-debug"
 
 echo "Sanity checks..."
-su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && ${PHP_BIN} bin/console lint:container --env=${APP_RUNTIME_ENV}"
-su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && ${PHP_BIN} bin/console about --env=${APP_RUNTIME_ENV} >/dev/null"
+su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && APP_ENV='${APP_RUNTIME_ENV}' APP_DEBUG=0 ${PHP_BIN} bin/console lint:container --env=${APP_RUNTIME_ENV}"
+su -s /bin/bash - "${APP_USER}" -c "cd '${NEW_RELEASE}' && APP_ENV='${APP_RUNTIME_ENV}' APP_DEBUG=0 ${PHP_BIN} bin/console about --env=${APP_RUNTIME_ENV} >/dev/null"
 
 echo "Switching current symlink..."
 ln -sfn "${NEW_RELEASE}" "${APP_BASE_DIR}/current"
 chown -h "${APP_USER}:${APP_GROUP}" "${APP_BASE_DIR}/current"
 
 echo "Reloading services..."
+configure_apache_vhost
 apache2ctl configtest
 systemctl reload "${PHP_FPM_SERVICE}"
 systemctl reload "${APACHE_SERVICE}"
