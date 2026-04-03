@@ -54,6 +54,8 @@ ENABLE_WEB_BUILD="${ENABLE_WEB_BUILD:-0}"       # 1 = install node/npm and build
 ALLOW_MISSING_EXTENSIONS="${ALLOW_MISSING_EXTENSIONS:-0}" # 1 = pre-prod fallback
 NON_INTERACTIVE="${NON_INTERACTIVE:-0}"         # 1 = no prompts
 SHARED_PUBLIC_DIRS="${SHARED_PUBLIC_DIRS:-uploads media}"
+NODE_BIN_DIR="${NODE_BIN_DIR:-/home/${APP_USER}/.nvm/versions/node/v24.12.0/bin}"
+REQUIRED_NODE_VERSION="${REQUIRED_NODE_VERSION:-24.12.0}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root (sudo)." >&2
@@ -450,41 +452,29 @@ shared_public_dirs_array() {
 }
 
 ensure_node_runtime() {
-  local min_major=20
-  local min_minor=12
+  local node_bin="${NODE_BIN_DIR}/node"
+  local npm_bin="${NODE_BIN_DIR}/npm"
+  local npx_bin="${NODE_BIN_DIR}/npx"
   local version=""
-  local major=0
-  local minor=0
-  local rest=""
-  local install_required=0
 
-  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-    install_required=1
-  else
-    version="$(node -p 'process.versions.node' 2>/dev/null || true)"
-    if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      install_required=1
-    else
-      major="${version%%.*}"
-      rest="${version#*.}"
-      minor="${rest%%.*}"
-      if (( major < min_major || (major == min_major && minor < min_minor) )); then
-        install_required=1
-      fi
-    fi
+  if [[ ! -x "${node_bin}" || ! -x "${npm_bin}" || ! -x "${npx_bin}" ]]; then
+    echo "Missing required Node runtime in ${NODE_BIN_DIR}." >&2
+    echo "Expected node/npm/npx from NVM Node v${REQUIRED_NODE_VERSION}." >&2
+    echo "Install it for ${APP_USER}, for example:" >&2
+    echo "  su -s /bin/bash - ${APP_USER} -c 'source ~/.nvm/nvm.sh && nvm install v${REQUIRED_NODE_VERSION}'" >&2
+    exit 1
   fi
 
-  if (( install_required == 0 )); then
-    return 0
+  version="$("${node_bin}" -p 'process.versions.node' 2>/dev/null || true)"
+  if [[ "${version}" != "${REQUIRED_NODE_VERSION}" ]]; then
+    echo "Node version mismatch in ${NODE_BIN_DIR}: expected ${REQUIRED_NODE_VERSION}, got ${version:-unknown}." >&2
+    exit 1
   fi
+}
 
-  echo "Installing Node.js 22.x (required >=${min_major}.${min_minor})..."
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update
-  curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh
-  bash /tmp/nodesource_setup.sh
-  apt-get install -y nodejs
-  rm -f /tmp/nodesource_setup.sh
+build_spa_pwa() {
+  local release_dir="$1"
+  su -s /bin/bash - "${APP_USER}" -c "set -Eeuo pipefail; export PATH='${NODE_BIN_DIR}':\$PATH; cd '${release_dir}'; if [[ -f web/package.json ]]; then npm --prefix web ci; cd web; else npm ci; fi; npx quasar build -m pwa"
 }
 
 echo "Installing required system packages..."
@@ -673,8 +663,8 @@ echo "Installing PHP dependencies..."
 su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && APP_ENV='${APP_RUNTIME_ENV}' APP_DEBUG=0 composer install --no-dev --optimize-autoloader --classmap-authoritative"
 
 if [[ "${ENABLE_WEB_BUILD}" == "1" ]]; then
-  echo "Installing and building SPA..."
-  su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && if [[ -f web/package.json ]]; then npm --prefix web ci && npm --prefix web run build; else npm ci && npm run web:build; fi"
+  echo "Installing and building SPA in PWA mode with Node v${REQUIRED_NODE_VERSION}..."
+  build_spa_pwa "${INIT_RELEASE}"
 fi
 
 echo "Clearing Symfony cache..."
