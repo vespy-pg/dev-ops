@@ -53,6 +53,7 @@ ENABLE_DB_BOOTSTRAP="${ENABLE_DB_BOOTSTRAP:-1}" # 1 = create db/user and run sql
 ENABLE_WEB_BUILD="${ENABLE_WEB_BUILD:-0}"       # 1 = install node/npm and build web
 ALLOW_MISSING_EXTENSIONS="${ALLOW_MISSING_EXTENSIONS:-0}" # 1 = pre-prod fallback
 NON_INTERACTIVE="${NON_INTERACTIVE:-0}"         # 1 = no prompts
+SHARED_PUBLIC_DIRS="${SHARED_PUBLIC_DIRS:-uploads media}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root (sudo)." >&2
@@ -443,6 +444,11 @@ copy_ops_env_to_release() {
   done < <(find "${release_env_dir}" -maxdepth 1 -type f -name "*.env.example" -printf "%f\n" | sort)
 }
 
+shared_public_dirs_array() {
+  read -r -a dirs <<< "${SHARED_PUBLIC_DIRS}"
+  printf '%s\n' "${dirs[@]}"
+}
+
 ensure_node_runtime() {
   local min_major=20
   local min_minor=12
@@ -558,7 +564,11 @@ a2dismod php8.2 >/dev/null 2>&1 || true
 echo "Creating application user and directories..."
 id -u "${APP_USER}" >/dev/null 2>&1 || useradd --system --create-home --shell /bin/bash "${APP_USER}"
 mkdir -p "${APP_BASE_DIR}/"{releases,shared,var}
-mkdir -p "${APP_BASE_DIR}/shared"/{var/log,var/cache,public/uploads}
+mkdir -p "${APP_BASE_DIR}/shared/var/log" "${APP_BASE_DIR}/shared/var/cache"
+while IFS= read -r public_dir; do
+  [[ -n "${public_dir}" ]] || continue
+  mkdir -p "${APP_BASE_DIR}/shared/public/${public_dir}"
+done < <(shared_public_dirs_array)
 chown -R "${APP_USER}:${APP_GROUP}" "${APP_BASE_DIR}"
 
 echo "Configuring PHP-FPM pool for ${APP_NAME}..."

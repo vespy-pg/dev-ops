@@ -39,6 +39,7 @@ APACHE_SERVICE="${APACHE_SERVICE:-apache2}"
 
 ENABLE_WEB_BUILD="${ENABLE_WEB_BUILD:-1}"
 ALLOW_MISSING_EXTENSIONS="${ALLOW_MISSING_EXTENSIONS:-0}" # 1 = pre-prod fallback
+SHARED_PUBLIC_DIRS="${SHARED_PUBLIC_DIRS:-uploads media}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root (sudo)." >&2
@@ -290,6 +291,37 @@ copy_ops_env_to_release() {
   done < <(find "${release_env_dir}" -maxdepth 1 -type f -name "*.env.example" -printf "%f\n" | sort)
 }
 
+shared_public_dirs_array() {
+  read -r -a dirs <<< "${SHARED_PUBLIC_DIRS}"
+  printf '%s\n' "${dirs[@]}"
+}
+
+migrate_existing_public_dir_to_shared() {
+  local dir_name="$1"
+  local current_target
+  local source_dir
+  local shared_dir
+
+  current_target="$(readlink -f "${APP_BASE_DIR}/current" 2>/dev/null || true)"
+  if [[ -z "${current_target}" || ! -d "${current_target}" ]]; then
+    return 0
+  fi
+
+  source_dir="${current_target}/public/${dir_name}"
+  shared_dir="${APP_BASE_DIR}/shared/public/${dir_name}"
+  if [[ ! -d "${source_dir}" || -L "${source_dir}" ]]; then
+    return 0
+  fi
+
+  if [[ -n "$(find "${shared_dir}" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+    return 0
+  fi
+
+  echo "Migrating existing public/${dir_name} from current release to shared storage..."
+  cp -a "${source_dir}/." "${shared_dir}/"
+  chown -R "${APP_USER}:${APP_GROUP}" "${shared_dir}"
+}
+
 ensure_node_runtime() {
   local min_major=20
   local min_minor=12
@@ -440,16 +472,21 @@ if (( ${#PROJECT_REQUIRED_EXTENSIONS[@]} > 0 )); then
 fi
 
 echo "Linking shared files/directories..."
-mkdir -p "${APP_BASE_DIR}/shared"/{var/log,public/uploads}
+mkdir -p "${APP_BASE_DIR}/shared/var/log"
 install -d -o "${APP_USER}" -g "${APP_GROUP}" "${NEW_RELEASE}/var" "${NEW_RELEASE}/public"
 rm -rf "${NEW_RELEASE}/var/log"
 ln -s "${APP_BASE_DIR}/shared/var/log" "${NEW_RELEASE}/var/log"
 install -d -o "${APP_USER}" -g "${APP_GROUP}" "${NEW_RELEASE}/var/cache"
 
-if [[ -e "${NEW_RELEASE}/public/uploads" && ! -L "${NEW_RELEASE}/public/uploads" ]]; then
-  rm -rf "${NEW_RELEASE}/public/uploads"
-fi
-ln -sfn "${APP_BASE_DIR}/shared/public/uploads" "${NEW_RELEASE}/public/uploads"
+while IFS= read -r public_dir; do
+  [[ -n "${public_dir}" ]] || continue
+  mkdir -p "${APP_BASE_DIR}/shared/public/${public_dir}"
+  migrate_existing_public_dir_to_shared "${public_dir}"
+  if [[ -e "${NEW_RELEASE}/public/${public_dir}" && ! -L "${NEW_RELEASE}/public/${public_dir}" ]]; then
+    rm -rf "${NEW_RELEASE}/public/${public_dir}"
+  fi
+  ln -sfn "${APP_BASE_DIR}/shared/public/${public_dir}" "${NEW_RELEASE}/public/${public_dir}"
+done < <(shared_public_dirs_array)
 
 echo "Installing composer dependencies..."
 COMPOSER_INSTALL_FLAGS="--no-dev --optimize-autoloader --classmap-authoritative"
