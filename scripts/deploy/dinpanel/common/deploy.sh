@@ -455,7 +455,7 @@ configure_apache_vhost() {
 </VirtualHost>
 EOF
   cat > "${static_conf}" <<EOF
-Alias /icons ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/icons
+Alias /icons/ ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/icons/
 Alias /manifest.json ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/manifest.json
 Alias /sw.js ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/sw.js
 
@@ -467,6 +467,14 @@ EOF
   a2enconf "${APP_NAME}-spa-static" >/dev/null
   a2ensite "${APP_NAME}.conf" >/dev/null
   a2dissite 000-default >/dev/null 2>&1 || true
+}
+
+disable_default_apache_icons_alias() {
+  local alias_conf="/etc/apache2/mods-available/alias.conf"
+  if [[ ! -f "${alias_conf}" ]]; then
+    return 0
+  fi
+  sed -i 's|^[[:space:]]*Alias[[:space:]]\+/icons/.*|# disabled for dinpanel pwa icons: &|' "${alias_conf}"
 }
 
 echo "Using PHP version ${PHP_VERSION}"
@@ -580,6 +588,7 @@ chown -h "${APP_USER}:${APP_GROUP}" "${APP_BASE_DIR}/current"
 
 echo "Reloading services..."
 configure_apache_vhost
+disable_default_apache_icons_alias
 apache2ctl configtest
 systemctl reload "${PHP_FPM_SERVICE}"
 systemctl reload "${APACHE_SERVICE}"

@@ -478,6 +478,14 @@ build_spa_pwa() {
   su -s /bin/bash - "${APP_USER}" -c "set -Eeuo pipefail; export PATH='${NODE_BIN_DIR}':\$PATH; cd '${release_dir}'; if [[ -f web/package.json ]]; then npm --prefix web ci; cd web; else npm ci; fi; npx quasar build -m pwa"
 }
 
+disable_default_apache_icons_alias() {
+  local alias_conf="/etc/apache2/mods-available/alias.conf"
+  if [[ ! -f "${alias_conf}" ]]; then
+    return 0
+  fi
+  sed -i 's|^[[:space:]]*Alias[[:space:]]\+/icons/.*|# disabled for dinpanel pwa icons: &|' "${alias_conf}"
+}
+
 copy_first_existing_asset() {
   local target="$1"
   shift
@@ -691,6 +699,7 @@ EOF
 a2enconf "${APP_NAME}-spa-static"
 a2ensite "${APP_NAME}.conf"
 a2dissite 000-default >/dev/null 2>&1 || true
+disable_default_apache_icons_alias
 
 echo "Validating repository access for ${APP_USER}..."
 if ! su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; git ls-remote --exit-code '${APP_REPO_URL}' HEAD >/dev/null 2>&1"; then
