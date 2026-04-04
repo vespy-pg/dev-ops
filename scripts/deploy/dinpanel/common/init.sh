@@ -56,6 +56,7 @@ NON_INTERACTIVE="${NON_INTERACTIVE:-0}"         # 1 = no prompts
 SHARED_PUBLIC_DIRS="${SHARED_PUBLIC_DIRS:-uploads media}"
 NODE_BIN_DIR="${NODE_BIN_DIR:-/home/${APP_USER}/.nvm/versions/node/v24.12.0/bin}"
 REQUIRED_NODE_VERSION="${REQUIRED_NODE_VERSION:-24.12.0}"
+WEB_DIST_DIR="${WEB_DIST_DIR:-pwa}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root (sudo)." >&2
@@ -587,9 +588,9 @@ cat > "${VHOST_CONF}" <<EOF
 <VirtualHost *:80>
     ServerName ${APP_DOMAIN}
 
-    DocumentRoot ${APP_BASE_DIR}/current/web/dist/spa
+    DocumentRoot ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}
 
-    <Directory ${APP_BASE_DIR}/current/web/dist/spa>
+    <Directory ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}>
         AllowOverride None
         Require all granted
         FallbackResource /index.html
