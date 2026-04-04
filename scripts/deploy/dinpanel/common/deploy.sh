@@ -418,6 +418,7 @@ PHP_FPM_SOCK="${PHP_FPM_SOCK:-/run/php/${PHP_FPM_SERVICE}-${APP_NAME}.sock}"
 
 configure_apache_vhost() {
   local vhost_conf="/etc/apache2/sites-available/${APP_NAME}.conf"
+  local static_conf="/etc/apache2/conf-available/${APP_NAME}-spa-static.conf"
   cat > "${vhost_conf}" <<EOF
 <VirtualHost *:80>
     ServerName ${APP_DOMAIN}
@@ -453,6 +454,17 @@ configure_apache_vhost() {
     CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_api_access.log combined
 </VirtualHost>
 EOF
+  cat > "${static_conf}" <<EOF
+Alias /icons ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/icons
+Alias /manifest.json ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/manifest.json
+Alias /sw.js ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/sw.js
+
+<Directory ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/icons>
+    AllowOverride None
+    Require all granted
+</Directory>
+EOF
+  a2enconf "${APP_NAME}-spa-static" >/dev/null
   a2ensite "${APP_NAME}.conf" >/dev/null
   a2dissite 000-default >/dev/null 2>&1 || true
 }

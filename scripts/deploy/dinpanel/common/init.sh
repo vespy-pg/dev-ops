@@ -642,6 +642,7 @@ EOF
 
 echo "Configuring Apache vhost..."
 VHOST_CONF="/etc/apache2/sites-available/${APP_NAME}.conf"
+STATIC_CONF="/etc/apache2/conf-available/${APP_NAME}-spa-static.conf"
 cat > "${VHOST_CONF}" <<EOF
 <VirtualHost *:80>
     ServerName ${APP_DOMAIN}
@@ -677,6 +678,17 @@ cat > "${VHOST_CONF}" <<EOF
     CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_api_access.log combined
 </VirtualHost>
 EOF
+cat > "${STATIC_CONF}" <<EOF
+Alias /icons ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/icons
+Alias /manifest.json ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/manifest.json
+Alias /sw.js ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/sw.js
+
+<Directory ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/icons>
+    AllowOverride None
+    Require all granted
+</Directory>
+EOF
+a2enconf "${APP_NAME}-spa-static"
 a2ensite "${APP_NAME}.conf"
 a2dissite 000-default >/dev/null 2>&1 || true
 
