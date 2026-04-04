@@ -478,6 +478,56 @@ build_spa_pwa() {
   su -s /bin/bash - "${APP_USER}" -c "set -Eeuo pipefail; export PATH='${NODE_BIN_DIR}':\$PATH; cd '${release_dir}'; if [[ -f web/package.json ]]; then npm --prefix web ci; cd web; else npm ci; fi; npx quasar build -m pwa"
 }
 
+copy_first_existing_asset() {
+  local target="$1"
+  shift
+  local source=""
+  for source in "$@"; do
+    if [[ -f "${source}" ]]; then
+      install -m 644 "${source}" "${target}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ensure_pwa_web_assets() {
+  local release_dir="$1"
+  local dist_root="${release_dir}/web/dist/${WEB_DIST_DIR}"
+  local icons_dir="${dist_root}/icons"
+  local required_file=""
+  local missing=()
+  local icon_name=""
+
+  if [[ ! -d "${dist_root}" ]]; then
+    echo "Missing PWA dist root: ${dist_root}" >&2
+    exit 1
+  fi
+
+  mkdir -p "${icons_dir}"
+
+  # Keep root-level icon URLs stable even when quasar output changes directory layout.
+  for icon_name in icon-192x192.png icon-512x512.png icon-512x512-maskable.png; do
+    if [[ ! -f "${icons_dir}/${icon_name}" ]]; then
+      copy_first_existing_asset "${icons_dir}/${icon_name}" \
+        "${dist_root}/img/icons/${icon_name}" \
+        "${release_dir}/web/src-pwa/icons/${icon_name}" \
+        "${release_dir}/web/public/icons/${icon_name}" || true
+    fi
+  done
+
+  for required_file in manifest.json sw.js icons/icon-192x192.png icons/icon-512x512.png icons/icon-512x512-maskable.png; do
+    if [[ ! -f "${dist_root}/${required_file}" ]]; then
+      missing+=("${required_file}")
+    fi
+  done
+
+  if (( ${#missing[@]} > 0 )); then
+    echo "Missing required web assets in ${dist_root}: ${missing[*]}" >&2
+    exit 1
+  fi
+}
+
 echo "Installing required system packages..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -666,6 +716,7 @@ su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && APP_ENV='${APP_RUNTI
 if [[ "${ENABLE_WEB_BUILD}" == "1" ]]; then
   echo "Installing and building SPA in PWA mode with Node v${REQUIRED_NODE_VERSION}..."
   build_spa_pwa "${INIT_RELEASE}"
+  ensure_pwa_web_assets "${INIT_RELEASE}"
 fi
 
 echo "Clearing Symfony cache..."
