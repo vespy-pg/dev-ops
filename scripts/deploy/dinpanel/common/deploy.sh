@@ -380,7 +380,7 @@ ensure_pwa_web_assets() {
   mkdir -p "${icons_dir}"
 
   # Keep root-level icon URLs stable even when quasar output changes directory layout.
-  for icon_name in icon-192x192.png icon-512x512.png icon-512x512-maskable.png; do
+  for icon_name in icon-128x128.png icon-192x192.png icon-256x256.png icon-384x384.png icon-512x512.png icon-512x512-maskable.png; do
     if [[ ! -f "${icons_dir}/${icon_name}" ]]; then
       copy_first_existing_asset "${icons_dir}/${icon_name}" \
         "${dist_root}/img/icons/${icon_name}" \
@@ -389,7 +389,15 @@ ensure_pwa_web_assets() {
     fi
   done
 
-  for required_file in manifest.json sw.js icons/icon-192x192.png icons/icon-512x512.png icons/icon-512x512-maskable.png; do
+  for required_file in \
+    manifest.json \
+    sw.js \
+    icons/icon-128x128.png \
+    icons/icon-192x192.png \
+    icons/icon-256x256.png \
+    icons/icon-384x384.png \
+    icons/icon-512x512.png \
+    icons/icon-512x512-maskable.png; do
     if [[ ! -f "${dist_root}/${required_file}" ]]; then
       missing+=("${required_file}")
     fi
