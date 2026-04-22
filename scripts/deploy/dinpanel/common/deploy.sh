@@ -43,6 +43,14 @@ SHARED_PUBLIC_DIRS="${SHARED_PUBLIC_DIRS:-uploads media}"
 NODE_BIN_DIR="${NODE_BIN_DIR:-/home/${APP_USER}/.nvm/versions/node/v24.12.0/bin}"
 REQUIRED_NODE_VERSION="${REQUIRED_NODE_VERSION:-24.12.0}"
 WEB_DIST_DIR="${WEB_DIST_DIR:-pwa}"
+CANONICAL_APP_DOMAIN="${CANONICAL_APP_DOMAIN:-${APP_DOMAIN#www.}}"
+WWW_APP_DOMAIN="${WWW_APP_DOMAIN:-www.${CANONICAL_APP_DOMAIN}}"
+if [[ "${DEPLOY_ENV_NORMALIZED}" == "prod" ]]; then
+  FORCE_HTTPS_REDIRECT_DEFAULT=1
+else
+  FORCE_HTTPS_REDIRECT_DEFAULT=0
+fi
+FORCE_HTTPS_REDIRECT="${FORCE_HTTPS_REDIRECT:-${FORCE_HTTPS_REDIRECT_DEFAULT}}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root (sudo)." >&2
@@ -419,9 +427,36 @@ PHP_FPM_SOCK="${PHP_FPM_SOCK:-/run/php/${PHP_FPM_SERVICE}-${APP_NAME}.sock}"
 configure_apache_vhost() {
   local vhost_conf="/etc/apache2/sites-available/${APP_NAME}.conf"
   local static_conf="/etc/apache2/conf-available/${APP_NAME}-spa-static.conf"
+  local spa_redirects=""
+  local api_redirects=""
+
+  if [[ "${FORCE_HTTPS_REDIRECT}" == "1" ]]; then
+    spa_redirects="$(cat <<EOF
+    RewriteEngine On
+    RewriteCond %{HTTP_HOST} =${WWW_APP_DOMAIN} [NC]
+    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+    RewriteCond %{HTTP_HOST} =${CANONICAL_APP_DOMAIN} [NC]
+    RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
+    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+EOF
+)"
+    api_redirects="$(cat <<EOF
+    RewriteEngine On
+    RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
+    RewriteRule ^ https://${API_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+EOF
+)"
+  fi
+
   cat > "${vhost_conf}" <<EOF
 <VirtualHost *:80>
-    ServerName ${APP_DOMAIN}
+    ServerName ${CANONICAL_APP_DOMAIN}
+    ServerAlias ${WWW_APP_DOMAIN}
+
+${spa_redirects}
 
     DocumentRoot ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}
 
@@ -437,6 +472,8 @@ configure_apache_vhost() {
 
 <VirtualHost *:80>
     ServerName ${API_DOMAIN}
+
+${api_redirects}
 
     DocumentRoot ${APP_BASE_DIR}/current/public
 
@@ -467,6 +504,19 @@ EOF
   a2enconf "${APP_NAME}-spa-static" >/dev/null
   a2ensite "${APP_NAME}.conf" >/dev/null
   a2dissite 000-default >/dev/null 2>&1 || true
+}
+
+configure_apache_hardening() {
+  local hardening_conf="/etc/apache2/conf-available/${APP_NAME}-seo-hardening.conf"
+  cat > "${hardening_conf}" <<EOF
+ServerTokens Prod
+ServerSignature Off
+
+<IfModule mod_headers.c>
+    Header always unset X-Powered-By
+</IfModule>
+EOF
+  a2enconf "${APP_NAME}-seo-hardening" >/dev/null
 }
 
 disable_default_apache_icons_alias() {
@@ -587,6 +637,7 @@ ln -sfn "${NEW_RELEASE}" "${APP_BASE_DIR}/current"
 chown -h "${APP_USER}:${APP_GROUP}" "${APP_BASE_DIR}/current"
 
 echo "Reloading services..."
+configure_apache_hardening
 configure_apache_vhost
 disable_default_apache_icons_alias
 apache2ctl configtest
@@ -603,6 +654,10 @@ fi
 
 CURRENT_TARGET="$(readlink -f "${APP_BASE_DIR}/current")"
 if [[ -n "${APP_DOMAIN}" ]]; then
-  echo "Smoke test URL: http://${APP_DOMAIN}/"
+  if [[ "${FORCE_HTTPS_REDIRECT}" == "1" ]]; then
+    echo "Smoke test URL: https://${CANONICAL_APP_DOMAIN}/"
+  else
+    echo "Smoke test URL: http://${APP_DOMAIN}/"
+  fi
 fi
 echo "Deploy complete. Current release: ${CURRENT_TARGET}"

@@ -57,6 +57,14 @@ SHARED_PUBLIC_DIRS="${SHARED_PUBLIC_DIRS:-uploads media}"
 NODE_BIN_DIR="${NODE_BIN_DIR:-/home/${APP_USER}/.nvm/versions/node/v24.12.0/bin}"
 REQUIRED_NODE_VERSION="${REQUIRED_NODE_VERSION:-24.12.0}"
 WEB_DIST_DIR="${WEB_DIST_DIR:-pwa}"
+CANONICAL_APP_DOMAIN="${CANONICAL_APP_DOMAIN:-${APP_DOMAIN#www.}}"
+WWW_APP_DOMAIN="${WWW_APP_DOMAIN:-www.${CANONICAL_APP_DOMAIN}}"
+if [[ "${DEPLOY_ENV_NORMALIZED}" == "prod" ]]; then
+  FORCE_HTTPS_REDIRECT_DEFAULT=1
+else
+  FORCE_HTTPS_REDIRECT_DEFAULT=0
+fi
+FORCE_HTTPS_REDIRECT="${FORCE_HTTPS_REDIRECT:-${FORCE_HTTPS_REDIRECT_DEFAULT}}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root (sudo)." >&2
@@ -618,6 +626,18 @@ a2dismod php7.4 >/dev/null 2>&1 || true
 a2dismod php8.1 >/dev/null 2>&1 || true
 a2dismod php8.2 >/dev/null 2>&1 || true
 
+echo "Configuring Apache hardening..."
+HARDENING_CONF="/etc/apache2/conf-available/${APP_NAME}-seo-hardening.conf"
+cat > "${HARDENING_CONF}" <<EOF
+ServerTokens Prod
+ServerSignature Off
+
+<IfModule mod_headers.c>
+    Header always unset X-Powered-By
+</IfModule>
+EOF
+a2enconf "${APP_NAME}-seo-hardening"
+
 echo "Creating application user and directories..."
 id -u "${APP_USER}" >/dev/null 2>&1 || useradd --system --create-home --shell /bin/bash "${APP_USER}"
 mkdir -p "${APP_BASE_DIR}/"{releases,shared,var}
@@ -651,9 +671,34 @@ EOF
 echo "Configuring Apache vhost..."
 VHOST_CONF="/etc/apache2/sites-available/${APP_NAME}.conf"
 STATIC_CONF="/etc/apache2/conf-available/${APP_NAME}-spa-static.conf"
+SPA_REDIRECT_RULES=""
+API_REDIRECT_RULES=""
+if [[ "${FORCE_HTTPS_REDIRECT}" == "1" ]]; then
+  SPA_REDIRECT_RULES="$(cat <<EOF
+    RewriteEngine On
+    RewriteCond %{HTTP_HOST} =${WWW_APP_DOMAIN} [NC]
+    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+    RewriteCond %{HTTP_HOST} =${CANONICAL_APP_DOMAIN} [NC]
+    RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
+    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+EOF
+)"
+  API_REDIRECT_RULES="$(cat <<EOF
+    RewriteEngine On
+    RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
+    RewriteRule ^ https://${API_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+EOF
+)"
+fi
 cat > "${VHOST_CONF}" <<EOF
 <VirtualHost *:80>
-    ServerName ${APP_DOMAIN}
+    ServerName ${CANONICAL_APP_DOMAIN}
+    ServerAlias ${WWW_APP_DOMAIN}
+
+${SPA_REDIRECT_RULES}
 
     DocumentRoot ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}
 
@@ -669,6 +714,8 @@ cat > "${VHOST_CONF}" <<EOF
 
 <VirtualHost *:80>
     ServerName ${API_DOMAIN}
+
+${API_REDIRECT_RULES}
 
     DocumentRoot ${APP_BASE_DIR}/current/public
 
