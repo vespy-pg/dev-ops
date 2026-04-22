@@ -449,6 +449,18 @@ EOF
 
 EOF
 )"
+  else
+    spa_redirects="$(cat <<EOF
+    RewriteEngine On
+    RewriteCond %{HTTP_HOST} =${WWW_APP_DOMAIN} [NC]
+    RewriteCond %{HTTP:X-Forwarded-Proto} =https [NC]
+    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+    RewriteCond %{HTTP_HOST} =${WWW_APP_DOMAIN} [NC]
+    RewriteRule ^ http://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+EOF
+)"
   fi
 
   cat > "${vhost_conf}" <<EOF
@@ -514,6 +526,7 @@ ServerSignature Off
 
 <IfModule mod_headers.c>
     Header always unset X-Powered-By
+    Header always unset Server
 </IfModule>
 EOF
   a2enconf "${APP_NAME}-seo-hardening" >/dev/null
