@@ -627,17 +627,21 @@ a2dismod php8.1 >/dev/null 2>&1 || true
 a2dismod php8.2 >/dev/null 2>&1 || true
 
 echo "Configuring Apache hardening..."
-HARDENING_CONF="/etc/apache2/conf-available/${APP_NAME}-seo-hardening.conf"
+HARDENING_CONF_NAME="zz-${APP_NAME}-seo-hardening"
+LEGACY_HARDENING_CONF_NAME="${APP_NAME}-seo-hardening"
+HARDENING_CONF="/etc/apache2/conf-available/${HARDENING_CONF_NAME}.conf"
 cat > "${HARDENING_CONF}" <<EOF
 ServerTokens Prod
 ServerSignature Off
+AddDefaultCharset UTF-8
 
 <IfModule mod_headers.c>
     Header always unset X-Powered-By
     Header always unset Server
 </IfModule>
 EOF
-a2enconf "${APP_NAME}-seo-hardening"
+a2disconf "${LEGACY_HARDENING_CONF_NAME}" >/dev/null 2>&1 || true
+a2enconf "${HARDENING_CONF_NAME}"
 
 echo "Creating application user and directories..."
 id -u "${APP_USER}" >/dev/null 2>&1 || useradd --system --create-home --shell /bin/bash "${APP_USER}"
@@ -673,9 +677,16 @@ echo "Configuring Apache vhost..."
 VHOST_CONF="/etc/apache2/sites-available/${APP_NAME}.conf"
 STATIC_CONF="/etc/apache2/conf-available/${APP_NAME}-spa-static.conf"
 SPA_REDIRECT_RULES=""
+CANONICAL_SPA_REDIRECT_RULES=""
 API_REDIRECT_RULES=""
 if [[ "${FORCE_HTTPS_REDIRECT}" == "1" ]]; then
   SPA_REDIRECT_RULES="$(cat <<EOF
+    RewriteEngine On
+    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+EOF
+)"
+  CANONICAL_SPA_REDIRECT_RULES="$(cat <<EOF
     RewriteEngine On
     RewriteCond %{HTTP_HOST} =${WWW_APP_DOMAIN} [NC]
     RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
@@ -696,11 +707,9 @@ EOF
 else
   SPA_REDIRECT_RULES="$(cat <<EOF
     RewriteEngine On
-    RewriteCond %{HTTP_HOST} =${WWW_APP_DOMAIN} [NC]
     RewriteCond %{HTTP:X-Forwarded-Proto} =https [NC]
     RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
 
-    RewriteCond %{HTTP_HOST} =${WWW_APP_DOMAIN} [NC]
     RewriteRule ^ http://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
 
 EOF
@@ -708,10 +717,18 @@ EOF
 fi
 cat > "${VHOST_CONF}" <<EOF
 <VirtualHost *:80>
-    ServerName ${CANONICAL_APP_DOMAIN}
-    ServerAlias ${WWW_APP_DOMAIN}
+    ServerName ${WWW_APP_DOMAIN}
 
-${SPA_REDIRECT_RULES}
+    ${SPA_REDIRECT_RULES}
+
+    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_www_error.log
+    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_www_access.log combined
+</VirtualHost>
+
+<VirtualHost *:80>
+    ServerName ${CANONICAL_APP_DOMAIN}
+
+    ${CANONICAL_SPA_REDIRECT_RULES}
 
     DocumentRoot ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}
 

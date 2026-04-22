@@ -427,11 +427,18 @@ PHP_FPM_SOCK="${PHP_FPM_SOCK:-/run/php/${PHP_FPM_SERVICE}-${APP_NAME}.sock}"
 configure_apache_vhost() {
   local vhost_conf="/etc/apache2/sites-available/${APP_NAME}.conf"
   local static_conf="/etc/apache2/conf-available/${APP_NAME}-spa-static.conf"
-  local spa_redirects=""
+  local www_redirects=""
+  local canonical_spa_redirects=""
   local api_redirects=""
 
   if [[ "${FORCE_HTTPS_REDIRECT}" == "1" ]]; then
-    spa_redirects="$(cat <<EOF
+    www_redirects="$(cat <<EOF
+    RewriteEngine On
+    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+EOF
+)"
+    canonical_spa_redirects="$(cat <<EOF
     RewriteEngine On
     RewriteCond %{HTTP_HOST} =${WWW_APP_DOMAIN} [NC]
     RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
@@ -450,13 +457,11 @@ EOF
 EOF
 )"
   else
-    spa_redirects="$(cat <<EOF
+    www_redirects="$(cat <<EOF
     RewriteEngine On
-    RewriteCond %{HTTP_HOST} =${WWW_APP_DOMAIN} [NC]
     RewriteCond %{HTTP:X-Forwarded-Proto} =https [NC]
     RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
 
-    RewriteCond %{HTTP_HOST} =${WWW_APP_DOMAIN} [NC]
     RewriteRule ^ http://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
 
 EOF
@@ -465,10 +470,18 @@ EOF
 
   cat > "${vhost_conf}" <<EOF
 <VirtualHost *:80>
-    ServerName ${CANONICAL_APP_DOMAIN}
-    ServerAlias ${WWW_APP_DOMAIN}
+    ServerName ${WWW_APP_DOMAIN}
 
-${spa_redirects}
+${www_redirects}
+
+    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_www_error.log
+    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_www_access.log combined
+</VirtualHost>
+
+<VirtualHost *:80>
+    ServerName ${CANONICAL_APP_DOMAIN}
+
+${canonical_spa_redirects}
 
     DocumentRoot ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}
 
@@ -519,17 +532,21 @@ EOF
 }
 
 configure_apache_hardening() {
-  local hardening_conf="/etc/apache2/conf-available/${APP_NAME}-seo-hardening.conf"
+  local hardening_conf_name="zz-${APP_NAME}-seo-hardening"
+  local legacy_hardening_conf_name="${APP_NAME}-seo-hardening"
+  local hardening_conf="/etc/apache2/conf-available/${hardening_conf_name}.conf"
   cat > "${hardening_conf}" <<EOF
 ServerTokens Prod
 ServerSignature Off
+AddDefaultCharset UTF-8
 
 <IfModule mod_headers.c>
     Header always unset X-Powered-By
     Header always unset Server
 </IfModule>
 EOF
-  a2enconf "${APP_NAME}-seo-hardening" >/dev/null
+  a2disconf "${legacy_hardening_conf_name}" >/dev/null 2>&1 || true
+  a2enconf "${hardening_conf_name}" >/dev/null
 }
 
 disable_default_apache_icons_alias() {
