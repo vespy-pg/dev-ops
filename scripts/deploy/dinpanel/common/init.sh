@@ -61,10 +61,21 @@ CANONICAL_APP_DOMAIN="${CANONICAL_APP_DOMAIN:-${APP_DOMAIN#www.}}"
 WWW_APP_DOMAIN="${WWW_APP_DOMAIN:-www.${CANONICAL_APP_DOMAIN}}"
 if [[ "${DEPLOY_ENV_NORMALIZED}" == "prod" ]]; then
   FORCE_HTTPS_REDIRECT_DEFAULT=1
+  ENABLE_TLS_AUTOMATION_DEFAULT=1
 else
   FORCE_HTTPS_REDIRECT_DEFAULT=0
+  ENABLE_TLS_AUTOMATION_DEFAULT=0
 fi
 FORCE_HTTPS_REDIRECT="${FORCE_HTTPS_REDIRECT:-${FORCE_HTTPS_REDIRECT_DEFAULT}}"
+ENABLE_TLS_AUTOMATION="${ENABLE_TLS_AUTOMATION:-${ENABLE_TLS_AUTOMATION_DEFAULT}}"
+LETSENCRYPT_WEBROOT="${LETSENCRYPT_WEBROOT:-/var/www/letsencrypt}"
+ACME_CHALLENGE_DIR="${LETSENCRYPT_WEBROOT%/}/.well-known/acme-challenge"
+TLS_EMAIL="${TLS_EMAIL:-}"
+TLS_CERT_NAME="${TLS_CERT_NAME:-${CANONICAL_APP_DOMAIN}}"
+TLS_DOMAINS="${TLS_DOMAINS:-${CANONICAL_APP_DOMAIN} ${WWW_APP_DOMAIN} ${API_DOMAIN}}"
+TLS_CERT_DIR="${TLS_CERT_DIR:-/etc/letsencrypt/live/${TLS_CERT_NAME}}"
+TLS_CERT_FULLCHAIN="${TLS_CERT_FULLCHAIN:-${TLS_CERT_DIR}/fullchain.pem}"
+TLS_CERT_PRIVKEY="${TLS_CERT_PRIVKEY:-${TLS_CERT_DIR}/privkey.pem}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root (sudo)." >&2
@@ -129,6 +140,259 @@ strip_wrapping_quotes() {
     value="${value:1:${#value}-2}"
   fi
   printf '%s' "${value}"
+}
+
+cert_file_exists() {
+  local file_path="$1"
+  [[ -f "${file_path}" && -s "${file_path}" ]]
+}
+
+configure_certbot_renew_hook() {
+  local hook_dir="/etc/letsencrypt/renewal-hooks/deploy"
+  local hook_file="${hook_dir}/${APP_NAME}-reload-apache.sh"
+
+  mkdir -p "${hook_dir}"
+  cat > "${hook_file}" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+systemctl reload ${APACHE_SERVICE}
+EOF
+  chmod 755 "${hook_file}"
+}
+
+ensure_tls_certificate() {
+  local -a certbot_cmd=()
+  local domain=""
+  local has_domain=0
+
+  mkdir -p "${ACME_CHALLENGE_DIR}"
+
+  certbot_cmd=(
+    certbot certonly
+    --webroot -w "${LETSENCRYPT_WEBROOT}"
+    --cert-name "${TLS_CERT_NAME}"
+    --agree-tos
+    --non-interactive
+    --expand
+  )
+
+  if [[ -n "${TLS_EMAIL}" ]]; then
+    certbot_cmd+=(--email "${TLS_EMAIL}")
+  else
+    certbot_cmd+=(--register-unsafely-without-email)
+  fi
+
+  for domain in ${TLS_DOMAINS}; do
+    [[ -n "${domain}" ]] || continue
+    certbot_cmd+=(-d "${domain}")
+    has_domain=1
+  done
+
+  if [[ "${has_domain}" != "1" ]]; then
+    echo "TLS_DOMAINS is empty; cannot issue TLS certificate." >&2
+    return 1
+  fi
+
+  echo "Ensuring TLS certificate for: ${TLS_DOMAINS}"
+  "${certbot_cmd[@]}"
+}
+
+configure_apache_vhost() {
+  local vhost_conf="/etc/apache2/sites-available/${APP_NAME}.conf"
+  local static_conf="/etc/apache2/conf-available/${APP_NAME}-spa-static.conf"
+  local acme_aliases=""
+  local spa_redirect_rules=""
+  local canonical_spa_redirect_rules=""
+  local api_redirect_rules=""
+  local https_vhosts=""
+  local tls_vhost_enabled=0
+
+  acme_aliases="$(cat <<EOF
+    Alias /.well-known/acme-challenge/ ${ACME_CHALLENGE_DIR}/
+    <Directory ${ACME_CHALLENGE_DIR}>
+        Options None
+        AllowOverride None
+        ForceType text/plain
+        Require all granted
+    </Directory>
+
+EOF
+)"
+
+  if [[ "${FORCE_HTTPS_REDIRECT}" == "1" ]]; then
+    spa_redirect_rules="$(cat <<EOF
+    RewriteEngine On
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/ [NC]
+    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+EOF
+)"
+    canonical_spa_redirect_rules="$(cat <<EOF
+    RewriteEngine On
+    RewriteCond %{HTTP_HOST} =${WWW_APP_DOMAIN} [NC]
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/ [NC]
+    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+    RewriteCond %{HTTP_HOST} =${CANONICAL_APP_DOMAIN} [NC]
+    RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/ [NC]
+    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+EOF
+)"
+    api_redirect_rules="$(cat <<EOF
+    RewriteEngine On
+    RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/ [NC]
+    RewriteRule ^ https://${API_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+EOF
+)"
+  else
+    spa_redirect_rules="$(cat <<EOF
+    RewriteEngine On
+    RewriteCond %{HTTP:X-Forwarded-Proto} =https [NC]
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/ [NC]
+    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/ [NC]
+    RewriteRule ^ http://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+EOF
+)"
+  fi
+
+  if cert_file_exists "${TLS_CERT_FULLCHAIN}" && cert_file_exists "${TLS_CERT_PRIVKEY}"; then
+    tls_vhost_enabled=1
+    https_vhosts="$(cat <<EOF
+<VirtualHost *:443>
+    ServerName ${WWW_APP_DOMAIN}
+    SSLEngine on
+    SSLCertificateFile ${TLS_CERT_FULLCHAIN}
+    SSLCertificateKeyFile ${TLS_CERT_PRIVKEY}
+
+    RewriteEngine On
+    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
+
+    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_www_ssl_error.log
+    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_www_ssl_access.log combined
+</VirtualHost>
+
+<VirtualHost *:443>
+    ServerName ${CANONICAL_APP_DOMAIN}
+    SSLEngine on
+    SSLCertificateFile ${TLS_CERT_FULLCHAIN}
+    SSLCertificateKeyFile ${TLS_CERT_PRIVKEY}
+
+    DocumentRoot ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}
+
+    <Directory ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}>
+        AllowOverride None
+        Require all granted
+        FallbackResource /index.html
+    </Directory>
+
+    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_ssl_error.log
+    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_ssl_access.log combined
+</VirtualHost>
+
+<VirtualHost *:443>
+    ServerName ${API_DOMAIN}
+    SSLEngine on
+    SSLCertificateFile ${TLS_CERT_FULLCHAIN}
+    SSLCertificateKeyFile ${TLS_CERT_PRIVKEY}
+
+    DocumentRoot ${APP_BASE_DIR}/current/public
+
+    <Directory ${APP_BASE_DIR}/current/public>
+        AllowOverride All
+        Require all granted
+        FallbackResource /index.php
+    </Directory>
+
+    <FilesMatch \.php$>
+        SetHandler "proxy:unix:${PHP_FPM_SOCK}|fcgi://localhost/"
+    </FilesMatch>
+
+    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_api_ssl_error.log
+    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_api_ssl_access.log combined
+</VirtualHost>
+
+EOF
+)"
+  elif [[ "${FORCE_HTTPS_REDIRECT}" == "1" ]]; then
+    echo "Warning: TLS certificate missing at ${TLS_CERT_FULLCHAIN} / ${TLS_CERT_PRIVKEY}; writing only :80 vhosts." >&2
+  fi
+
+  cat > "${vhost_conf}" <<EOF
+<VirtualHost *:80>
+    ServerName ${WWW_APP_DOMAIN}
+
+${acme_aliases}
+    ${spa_redirect_rules}
+
+    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_www_error.log
+    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_www_access.log combined
+</VirtualHost>
+
+<VirtualHost *:80>
+    ServerName ${CANONICAL_APP_DOMAIN}
+
+${acme_aliases}
+    ${canonical_spa_redirect_rules}
+
+    DocumentRoot ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}
+
+    <Directory ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}>
+        AllowOverride None
+        Require all granted
+        FallbackResource /index.html
+    </Directory>
+
+    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_error.log
+    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_access.log combined
+</VirtualHost>
+
+<VirtualHost *:80>
+    ServerName ${API_DOMAIN}
+
+${acme_aliases}
+${api_redirect_rules}
+
+    DocumentRoot ${APP_BASE_DIR}/current/public
+
+    <Directory ${APP_BASE_DIR}/current/public>
+        AllowOverride All
+        Require all granted
+        FallbackResource /index.php
+    </Directory>
+
+    <FilesMatch \.php$>
+        SetHandler "proxy:unix:${PHP_FPM_SOCK}|fcgi://localhost/"
+    </FilesMatch>
+
+    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_api_error.log
+    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_api_access.log combined
+</VirtualHost>
+
+${https_vhosts}
+EOF
+  cat > "${static_conf}" <<EOF
+Alias /icons ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/icons
+Alias /manifest.json ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/manifest.json
+Alias /sw.js ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/sw.js
+
+<Directory ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/icons>
+    AllowOverride None
+    Require all granted
+</Directory>
+EOF
+  a2enconf "${APP_NAME}-spa-static"
+  a2ensite "${APP_NAME}.conf"
+  a2dissite 000-default >/dev/null 2>&1 || true
+  if [[ "${tls_vhost_enabled}" == "1" ]]; then
+    a2enmod ssl >/dev/null
+  fi
 }
 
 prompt_overwrite_default_no() {
@@ -567,7 +831,7 @@ fi
 echo "Using PHP version ${PHP_VERSION}"
 apt-get install -y \
   git curl unzip ca-certificates lsb-release apt-transport-https software-properties-common gnupg2 openssl \
-  apache2 libapache2-mod-fcgid postgresql postgresql-client \
+  apache2 certbot libapache2-mod-fcgid postgresql postgresql-client \
   "php${PHP_VERSION}" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-fpm" \
   "php${PHP_VERSION}-common" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-dom" \
   "php${PHP_VERSION}-xml" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-intl" "php${PHP_VERSION}-gd" \
@@ -676,107 +940,17 @@ EOF
 echo "Configuring Apache vhost..."
 VHOST_CONF="/etc/apache2/sites-available/${APP_NAME}.conf"
 STATIC_CONF="/etc/apache2/conf-available/${APP_NAME}-spa-static.conf"
-SPA_REDIRECT_RULES=""
-CANONICAL_SPA_REDIRECT_RULES=""
-API_REDIRECT_RULES=""
-if [[ "${FORCE_HTTPS_REDIRECT}" == "1" ]]; then
-  SPA_REDIRECT_RULES="$(cat <<EOF
-    RewriteEngine On
-    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
-
-EOF
-)"
-  CANONICAL_SPA_REDIRECT_RULES="$(cat <<EOF
-    RewriteEngine On
-    RewriteCond %{HTTP_HOST} =${WWW_APP_DOMAIN} [NC]
-    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
-
-    RewriteCond %{HTTP_HOST} =${CANONICAL_APP_DOMAIN} [NC]
-    RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
-    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
-
-EOF
-)"
-  API_REDIRECT_RULES="$(cat <<EOF
-    RewriteEngine On
-    RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
-    RewriteRule ^ https://${API_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
-
-EOF
-)"
-else
-  SPA_REDIRECT_RULES="$(cat <<EOF
-    RewriteEngine On
-    RewriteCond %{HTTP:X-Forwarded-Proto} =https [NC]
-    RewriteRule ^ https://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
-
-    RewriteRule ^ http://${CANONICAL_APP_DOMAIN}%{REQUEST_URI} [R=301,L,NE]
-
-EOF
-)"
-fi
-cat > "${VHOST_CONF}" <<EOF
-<VirtualHost *:80>
-    ServerName ${WWW_APP_DOMAIN}
-
-    ${SPA_REDIRECT_RULES}
-
-    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_www_error.log
-    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_www_access.log combined
-</VirtualHost>
-
-<VirtualHost *:80>
-    ServerName ${CANONICAL_APP_DOMAIN}
-
-    ${CANONICAL_SPA_REDIRECT_RULES}
-
-    DocumentRoot ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}
-
-    <Directory ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}>
-        AllowOverride None
-        Require all granted
-        FallbackResource /index.html
-    </Directory>
-
-    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_error.log
-    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_access.log combined
-</VirtualHost>
-
-<VirtualHost *:80>
-    ServerName ${API_DOMAIN}
-
-${API_REDIRECT_RULES}
-
-    DocumentRoot ${APP_BASE_DIR}/current/public
-
-    <Directory ${APP_BASE_DIR}/current/public>
-        AllowOverride All
-        Require all granted
-        FallbackResource /index.php
-    </Directory>
-
-    <FilesMatch \.php$>
-        SetHandler "proxy:unix:${PHP_FPM_SOCK}|fcgi://localhost/"
-    </FilesMatch>
-
-    ErrorLog \${APACHE_LOG_DIR}/${APP_NAME}_api_error.log
-    CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_api_access.log combined
-</VirtualHost>
-EOF
-cat > "${STATIC_CONF}" <<EOF
-Alias /icons ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/icons
-Alias /manifest.json ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/manifest.json
-Alias /sw.js ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/sw.js
-
-<Directory ${APP_BASE_DIR}/current/web/dist/${WEB_DIST_DIR}/icons>
-    AllowOverride None
-    Require all granted
-</Directory>
-EOF
-a2enconf "${APP_NAME}-spa-static"
-a2ensite "${APP_NAME}.conf"
-a2dissite 000-default >/dev/null 2>&1 || true
+configure_apache_vhost
 disable_default_apache_icons_alias
+apache2ctl configtest
+systemctl restart "${APACHE_SERVICE}"
+
+if [[ "${ENABLE_TLS_AUTOMATION}" == "1" ]]; then
+  ensure_tls_certificate
+  configure_certbot_renew_hook
+  configure_apache_vhost
+  disable_default_apache_icons_alias
+fi
 
 echo "Validating repository access for ${APP_USER}..."
 if ! su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; git ls-remote --exit-code '${APP_REPO_URL}' HEAD >/dev/null 2>&1"; then
