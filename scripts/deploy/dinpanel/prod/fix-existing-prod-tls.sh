@@ -53,8 +53,8 @@ EOF
 a2enconf letsencrypt-acme-challenge >/dev/null
 
 cp -a "${APACHE_SITE}" "${APACHE_SITE}.bak.${BACKUP_SUFFIX}"
-if ! grep -q 'REQUEST_URI} !^/\\.well-known/acme-challenge/' "${APACHE_SITE}"; then
-  sed -i '/RewriteEngine On/a\    RewriteCond %{REQUEST_URI} !^/\\.well-known/acme-challenge/ [NC]' "${APACHE_SITE}"
+if ! grep -q 'RewriteRule \^/\\.well-known/acme-challenge/ - \[END\]' "${APACHE_SITE}"; then
+  sed -i -E '/RewriteEngine[[:space:]]+On/a\    RewriteRule ^/\\.well-known/acme-challenge/ - [END]' "${APACHE_SITE}"
 fi
 
 apache2ctl configtest
@@ -62,13 +62,20 @@ systemctl reload apache2
 
 PROBE_NAME="acme-probe-${BACKUP_SUFFIX}"
 PROBE_PATH="${ACME_DIR}/${PROBE_NAME}"
+PROBE_EXPECTED="ok-${PROBE_NAME}"
 echo "ok-${PROBE_NAME}" > "${PROBE_PATH}"
 
 for host in "${TLS_DOMAINS[@]}"; do
-  echo "Checking challenge path on ${host}..."
-  body="$(curl -fsS "http://${host}/.well-known/acme-challenge/${PROBE_NAME}" || true)"
-  if [[ "${body}" != "ok-${PROBE_NAME}" ]]; then
-    echo "ACME probe failed on ${host}. Got: ${body}" >&2
+  echo "Checking challenge path on ${host} (follow redirects)..."
+  probe_url="http://${host}/.well-known/acme-challenge/${PROBE_NAME}"
+  probe_response="$(curl -ksS -L --max-redirs 10 --write-out $'\nHTTP_CODE=%{http_code}\nURL_EFFECTIVE=%{url_effective}\n' "${probe_url}" || true)"
+  probe_body="${probe_response%%$'\nHTTP_CODE='*}"
+  probe_meta="${probe_response#*$'\nHTTP_CODE='}"
+  if [[ "${probe_body}" != "${PROBE_EXPECTED}" ]]; then
+    echo "ACME probe failed on ${host}." >&2
+    echo "Expected body: ${PROBE_EXPECTED}" >&2
+    echo "Got body: ${probe_body}" >&2
+    echo "${probe_meta}" >&2
     echo "Backup vhost: ${APACHE_SITE}.bak.${BACKUP_SUFFIX}" >&2
     rm -f "${PROBE_PATH}"
     exit 1
@@ -96,4 +103,3 @@ echo "Certificate details:"
 certbot certificates --cert-name "${CERT_NAME}"
 echo
 echo "Done."
-
