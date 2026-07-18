@@ -19,4 +19,11 @@ COMMON_DIR="$(cd "${SCRIPT_DIR}/../common" && pwd)"
 export APP_NAME="${APP_NAME:-dinpanel-test}"
 export APP_BASE_DIR="${APP_BASE_DIR:-/var/www/${APP_NAME}}"
 
+if [[ "${APP_NAME}" == "dinpanel" || "${APP_BASE_DIR%/}" == "/var/www/dinpanel" ]]; then
+  echo "Refusing to run test deploy against production app target." >&2
+  echo "APP_NAME=${APP_NAME}" >&2
+  echo "APP_BASE_DIR=${APP_BASE_DIR}" >&2
+  exit 1
+fi
+
 exec "${COMMON_DIR}/deploy.sh" test

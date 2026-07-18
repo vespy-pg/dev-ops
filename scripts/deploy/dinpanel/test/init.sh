@@ -15,4 +15,11 @@ export APP_BASE_DIR="${APP_BASE_DIR:-/var/www/${APP_NAME}}"
 export NON_INTERACTIVE="${NON_INTERACTIVE:-1}"
 export ENABLE_WEB_BUILD="${ENABLE_WEB_BUILD:-1}"
 
+if [[ "${APP_NAME}" == "dinpanel" || "${APP_BASE_DIR%/}" == "/var/www/dinpanel" ]]; then
+  echo "Refusing to run test init against production app target." >&2
+  echo "APP_NAME=${APP_NAME}" >&2
+  echo "APP_BASE_DIR=${APP_BASE_DIR}" >&2
+  exit 1
+fi
+
 exec "${COMMON_DIR}/init.sh" test
