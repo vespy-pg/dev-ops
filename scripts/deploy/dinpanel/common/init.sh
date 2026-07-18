@@ -51,6 +51,7 @@ DB_SCHEMA_OWNER="${DB_SCHEMA_OWNER:-${DB_ADMIN_USER}}"
 
 ENABLE_DB_BOOTSTRAP="${ENABLE_DB_BOOTSTRAP:-1}" # 1 = create db/user and run sql/[!0_]*
 ENABLE_WEB_BUILD="${ENABLE_WEB_BUILD:-0}"       # 1 = install node/npm and build web
+INSTALL_DEV_DEPENDENCIES="${INSTALL_DEV_DEPENDENCIES:-0}" # 1 = install Composer require-dev packages
 ALLOW_MISSING_EXTENSIONS="${ALLOW_MISSING_EXTENSIONS:-0}" # 1 = pre-prod fallback
 NON_INTERACTIVE="${NON_INTERACTIVE:-0}"         # 1 = no prompts
 SHARED_PUBLIC_DIRS="${SHARED_PUBLIC_DIRS:-uploads media}"
@@ -1097,7 +1098,11 @@ validate_auth_offline_grace_env_consistency "${INIT_RELEASE}"
 grant_db_schema_permissions "${INIT_RELEASE}"
 
 echo "Installing PHP dependencies..."
-su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && APP_ENV='${APP_RUNTIME_ENV}' APP_DEBUG=0 composer install --no-dev --optimize-autoloader --classmap-authoritative"
+COMPOSER_INSTALL_FLAGS="--optimize-autoloader --classmap-authoritative"
+if [[ "${INSTALL_DEV_DEPENDENCIES}" != "1" ]]; then
+  COMPOSER_INSTALL_FLAGS="--no-dev ${COMPOSER_INSTALL_FLAGS}"
+fi
+su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && APP_ENV='${APP_RUNTIME_ENV}' APP_DEBUG=0 composer install ${COMPOSER_INSTALL_FLAGS}"
 
 if [[ "${ENABLE_WEB_BUILD}" == "1" ]]; then
   echo "Installing and building SPA in PWA mode with Node v${REQUIRED_NODE_VERSION}..."

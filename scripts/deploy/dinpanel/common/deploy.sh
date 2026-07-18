@@ -42,6 +42,7 @@ PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-}"
 APACHE_SERVICE="${APACHE_SERVICE:-apache2}"
 
 ENABLE_WEB_BUILD="${ENABLE_WEB_BUILD:-1}"
+INSTALL_DEV_DEPENDENCIES="${INSTALL_DEV_DEPENDENCIES:-0}"
 ALLOW_MISSING_EXTENSIONS="${ALLOW_MISSING_EXTENSIONS:-0}" # 1 = pre-prod fallback
 SHARED_PUBLIC_DIRS="${SHARED_PUBLIC_DIRS:-uploads media}"
 NODE_BIN_DIR="${NODE_BIN_DIR:-/home/${APP_USER}/.nvm/versions/node/v24.12.0/bin}"
@@ -920,7 +921,10 @@ while IFS= read -r public_dir; do
 done < <(shared_public_dirs_array)
 
 echo "Installing composer dependencies..."
-COMPOSER_INSTALL_FLAGS="--no-dev --optimize-autoloader --classmap-authoritative"
+COMPOSER_INSTALL_FLAGS="--optimize-autoloader --classmap-authoritative"
+if [[ "${INSTALL_DEV_DEPENDENCIES}" != "1" ]]; then
+  COMPOSER_INSTALL_FLAGS="--no-dev ${COMPOSER_INSTALL_FLAGS}"
+fi
 if [[ "${ALLOW_MISSING_EXTENSIONS}" == "1" ]] && (( ${#MISSING_EXTENSIONS[@]} > 0 )); then
   for ext in "${MISSING_EXTENSIONS[@]}"; do
     COMPOSER_INSTALL_FLAGS+=" --ignore-platform-req=ext-${ext}"
