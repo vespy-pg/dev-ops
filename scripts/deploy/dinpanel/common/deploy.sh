@@ -36,6 +36,7 @@ DB_ADMIN_DB="${DB_ADMIN_DB:-postgres}"
 DB_ADMIN_USER="${DB_ADMIN_USER:-postgres}"
 DB_ADMIN_PASSWORD="${DB_ADMIN_PASSWORD:-}"
 DB_SCHEMA_NAME="${DB_SCHEMA_NAME:-app}"
+AUTH_OFFLINE_GRACE_HOURS_DEFAULT="${AUTH_OFFLINE_GRACE_HOURS_DEFAULT:-24}"
 
 PHP_VERSION="${PHP_VERSION:-auto}"
 PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-}"
@@ -240,6 +241,33 @@ validate_auth_offline_grace_env_consistency() {
     echo "AUTH_OFFLINE_GRACE_HOURS (${api_value}) must match VITE_AUTH_OFFLINE_GRACE_HOURS (${web_value})." >&2
     exit 1
   fi
+}
+
+normalize_auth_offline_grace_env_in_ops() {
+  local api_env="${OPS_ENV_DIR}/.api.env"
+  local web_env="${OPS_ENV_DIR}/.web.env"
+  local api_value=""
+  local web_value=""
+  local normalized_value=""
+
+  if [[ ! -f "${api_env}" || ! -f "${web_env}" ]]; then
+    return 0
+  fi
+
+  api_value="$(strip_wrapping_quotes "$(read_env_value "${api_env}" AUTH_OFFLINE_GRACE_HOURS)")"
+  web_value="$(strip_wrapping_quotes "$(read_env_value "${web_env}" VITE_AUTH_OFFLINE_GRACE_HOURS)")"
+
+  if [[ -n "${api_value}" ]]; then
+    normalized_value="${api_value}"
+  elif [[ -n "${web_value}" ]]; then
+    normalized_value="${web_value}"
+  else
+    normalized_value="${AUTH_OFFLINE_GRACE_HOURS_DEFAULT}"
+  fi
+
+  validate_positive_integer_env_value AUTH_OFFLINE_GRACE_HOURS "${normalized_value}"
+  set_env_value "${api_env}" AUTH_OFFLINE_GRACE_HOURS "${normalized_value}"
+  set_env_value "${web_env}" VITE_AUTH_OFFLINE_GRACE_HOURS "${normalized_value}"
 }
 
 grant_db_schema_permissions() {
@@ -880,6 +908,7 @@ su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; cd '${NEW_RELE
 
 validate_required_ops_env_files "${NEW_RELEASE}"
 normalize_db_env_in_ops
+normalize_auth_offline_grace_env_in_ops
 copy_ops_env_to_release "${NEW_RELEASE}"
 validate_auth_offline_grace_env_consistency "${NEW_RELEASE}"
 grant_db_schema_permissions "${NEW_RELEASE}"
