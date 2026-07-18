@@ -142,6 +142,110 @@ strip_wrapping_quotes() {
   printf '%s' "${value}"
 }
 
+validate_positive_integer_env_value() {
+  local key="$1"
+  local value="$2"
+  if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "${key} must be a positive integer hour value." >&2
+    exit 1
+  fi
+}
+
+validate_auth_offline_grace_env_consistency() {
+  local release_dir="$1"
+  local api_env="${release_dir}/env/.api.env"
+  local web_env="${release_dir}/env/.web.env"
+  local api_value=""
+  local web_value=""
+
+  if [[ ! -f "${api_env}" ]]; then
+    echo "Missing API env file for auth offline grace validation: ${api_env}" >&2
+    exit 1
+  fi
+  if [[ ! -f "${web_env}" ]]; then
+    echo "Missing web env file for auth offline grace validation: ${web_env}" >&2
+    exit 1
+  fi
+
+  api_value="$(strip_wrapping_quotes "$(read_env_value "${api_env}" AUTH_OFFLINE_GRACE_HOURS)")"
+  web_value="$(strip_wrapping_quotes "$(read_env_value "${web_env}" VITE_AUTH_OFFLINE_GRACE_HOURS)")"
+
+  validate_positive_integer_env_value AUTH_OFFLINE_GRACE_HOURS "${api_value}"
+  validate_positive_integer_env_value VITE_AUTH_OFFLINE_GRACE_HOURS "${web_value}"
+
+  if [[ "${api_value}" != "${web_value}" ]]; then
+    echo "AUTH_OFFLINE_GRACE_HOURS (${api_value}) must match VITE_AUTH_OFFLINE_GRACE_HOURS (${web_value})." >&2
+    exit 1
+  fi
+}
+
+grant_db_schema_permissions() {
+  local release_dir="$1"
+  local api_env="${release_dir}/env/${DB_ENV_FILE}"
+  local db_name=""
+  local db_user=""
+  local db_host=""
+  local db_port=""
+  local schema_name=""
+  local -a schemas=()
+
+  if [[ ! -f "${api_env}" ]]; then
+    if [[ -f "${release_dir}/env/.api.env" ]]; then
+      api_env="${release_dir}/env/.api.env"
+    elif [[ -f "${release_dir}/env/.env" ]]; then
+      api_env="${release_dir}/env/.env"
+    else
+      echo "Missing API env file for DB schema permission grant: ${release_dir}/env/${DB_ENV_FILE}" >&2
+      exit 1
+    fi
+  fi
+
+  db_name="$(strip_wrapping_quotes "$(read_env_value "${api_env}" DB_NAME)")"
+  db_user="$(strip_wrapping_quotes "$(read_env_value "${api_env}" DB_USER)")"
+  if [[ -z "${db_user}" ]]; then
+    db_user="$(strip_wrapping_quotes "$(read_env_value "${api_env}" DB_USERNAME)")"
+  fi
+  db_host="$(strip_wrapping_quotes "$(read_env_value "${api_env}" DB_HOST)")"
+  db_port="$(strip_wrapping_quotes "$(read_env_value "${api_env}" DB_PORT)")"
+  db_host="${db_host:-127.0.0.1}"
+  db_port="${db_port:-5432}"
+
+  if [[ -z "${db_name}" || -z "${db_user}" ]]; then
+    echo "DB_NAME and DB_USER/DB_USERNAME must be set in ${api_env}" >&2
+    exit 1
+  fi
+  if ! is_safe_sql_identifier "${db_name}" || ! is_safe_sql_identifier "${db_user}" || ! is_safe_sql_identifier "${DB_SCHEMA_NAME}"; then
+    echo "Unsafe DB_NAME, DB_USER/DB_USERNAME or DB_SCHEMA_NAME for schema permission grant." >&2
+    exit 1
+  fi
+
+  schemas=(public)
+  if [[ "${DB_SCHEMA_NAME}" != "public" ]]; then
+    schemas+=("${DB_SCHEMA_NAME}")
+  fi
+
+  for schema_name in "${schemas[@]}"; do
+    echo "Ensuring schema permissions on '${db_name}.${schema_name}' for role '${db_user}'..."
+    if [[ "${db_host}" == "127.0.0.1" || "${db_host}" == "localhost" ]] && [[ -z "${DB_ADMIN_PASSWORD}" ]]; then
+      su -s /bin/bash - postgres -c "psql -d '${db_name}' -v ON_ERROR_STOP=1 -v db_user='${db_user}' -v schema_name='${schema_name}'" <<'SQL'
+SELECT format('GRANT USAGE, CREATE ON SCHEMA %I TO %I', :'schema_name', :'db_user')
+FROM pg_namespace
+WHERE nspname = :'schema_name' \gexec
+SQL
+    else
+      env "PGPASSWORD=${DB_ADMIN_PASSWORD}" psql \
+        -h "${db_host}" -p "${db_port}" -U "${DB_ADMIN_USER}" -d "${db_name}" \
+        -v ON_ERROR_STOP=1 \
+        -v db_user="${db_user}" \
+        -v schema_name="${schema_name}" <<'SQL'
+SELECT format('GRANT USAGE, CREATE ON SCHEMA %I TO %I', :'schema_name', :'db_user')
+FROM pg_namespace
+WHERE nspname = :'schema_name' \gexec
+SQL
+    fi
+  done
+}
+
 cert_file_exists() {
   local file_path="$1"
   [[ -f "${file_path}" && -s "${file_path}" ]]
@@ -989,6 +1093,8 @@ fi
 
 echo "Copying env files into release..."
 copy_ops_env_to_release "${INIT_RELEASE}"
+validate_auth_offline_grace_env_consistency "${INIT_RELEASE}"
+grant_db_schema_permissions "${INIT_RELEASE}"
 
 echo "Installing PHP dependencies..."
 su -s /bin/bash - "${APP_USER}" -c "cd '${INIT_RELEASE}' && APP_ENV='${APP_RUNTIME_ENV}' APP_DEBUG=0 composer install --no-dev --optimize-autoloader --classmap-authoritative"

@@ -16,4 +16,7 @@ export GIT_REF="${1:-main}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMMON_DIR="$(cd "${SCRIPT_DIR}/../common" && pwd)"
 
+export APP_NAME="${APP_NAME:-dinpanel-test}"
+export APP_BASE_DIR="${APP_BASE_DIR:-/var/www/${APP_NAME}}"
+
 exec "${COMMON_DIR}/deploy.sh" test

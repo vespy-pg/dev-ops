@@ -32,6 +32,10 @@ GIT_REF="${GIT_REF:-main}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 APP_RUNTIME_ENV="${APP_RUNTIME_ENV:-${DEPLOY_ENV_NORMALIZED}}"
 DB_ENV_FILE="${DB_ENV_FILE:-.api.env}"
+DB_ADMIN_DB="${DB_ADMIN_DB:-postgres}"
+DB_ADMIN_USER="${DB_ADMIN_USER:-postgres}"
+DB_ADMIN_PASSWORD="${DB_ADMIN_PASSWORD:-}"
+DB_SCHEMA_NAME="${DB_SCHEMA_NAME:-app}"
 
 PHP_VERSION="${PHP_VERSION:-auto}"
 PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-}"
@@ -193,6 +197,115 @@ strip_wrapping_quotes() {
     value="${value:1:${#value}-2}"
   fi
   printf '%s' "${value}"
+}
+
+is_safe_sql_identifier() {
+  local value="$1"
+  [[ "${value}" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]
+}
+
+validate_positive_integer_env_value() {
+  local key="$1"
+  local value="$2"
+  if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "${key} must be a positive integer hour value." >&2
+    exit 1
+  fi
+}
+
+validate_auth_offline_grace_env_consistency() {
+  local release_dir="$1"
+  local api_env="${release_dir}/env/.api.env"
+  local web_env="${release_dir}/env/.web.env"
+  local api_value=""
+  local web_value=""
+
+  if [[ ! -f "${api_env}" ]]; then
+    echo "Missing API env file for auth offline grace validation: ${api_env}" >&2
+    exit 1
+  fi
+  if [[ ! -f "${web_env}" ]]; then
+    echo "Missing web env file for auth offline grace validation: ${web_env}" >&2
+    exit 1
+  fi
+
+  api_value="$(strip_wrapping_quotes "$(read_env_value "${api_env}" AUTH_OFFLINE_GRACE_HOURS)")"
+  web_value="$(strip_wrapping_quotes "$(read_env_value "${web_env}" VITE_AUTH_OFFLINE_GRACE_HOURS)")"
+
+  validate_positive_integer_env_value AUTH_OFFLINE_GRACE_HOURS "${api_value}"
+  validate_positive_integer_env_value VITE_AUTH_OFFLINE_GRACE_HOURS "${web_value}"
+
+  if [[ "${api_value}" != "${web_value}" ]]; then
+    echo "AUTH_OFFLINE_GRACE_HOURS (${api_value}) must match VITE_AUTH_OFFLINE_GRACE_HOURS (${web_value})." >&2
+    exit 1
+  fi
+}
+
+grant_db_schema_permissions() {
+  local release_dir="$1"
+  local api_env="${release_dir}/env/${DB_ENV_FILE}"
+  local db_name=""
+  local db_user=""
+  local db_host=""
+  local db_port=""
+  local schema_name=""
+  local -a schemas=()
+
+  if [[ ! -f "${api_env}" ]]; then
+    if [[ -f "${release_dir}/env/.api.env" ]]; then
+      api_env="${release_dir}/env/.api.env"
+    elif [[ -f "${release_dir}/env/.env" ]]; then
+      api_env="${release_dir}/env/.env"
+    else
+      echo "Missing API env file for DB schema permission grant: ${release_dir}/env/${DB_ENV_FILE}" >&2
+      exit 1
+    fi
+  fi
+
+  db_name="$(strip_wrapping_quotes "$(read_env_value "${api_env}" DB_NAME)")"
+  db_user="$(strip_wrapping_quotes "$(read_env_value "${api_env}" DB_USER)")"
+  if [[ -z "${db_user}" ]]; then
+    db_user="$(strip_wrapping_quotes "$(read_env_value "${api_env}" DB_USERNAME)")"
+  fi
+  db_host="$(strip_wrapping_quotes "$(read_env_value "${api_env}" DB_HOST)")"
+  db_port="$(strip_wrapping_quotes "$(read_env_value "${api_env}" DB_PORT)")"
+  db_host="${db_host:-127.0.0.1}"
+  db_port="${db_port:-5432}"
+
+  if [[ -z "${db_name}" || -z "${db_user}" ]]; then
+    echo "DB_NAME and DB_USER/DB_USERNAME must be set in ${api_env}" >&2
+    exit 1
+  fi
+  if ! is_safe_sql_identifier "${db_name}" || ! is_safe_sql_identifier "${db_user}" || ! is_safe_sql_identifier "${DB_SCHEMA_NAME}"; then
+    echo "Unsafe DB_NAME, DB_USER/DB_USERNAME or DB_SCHEMA_NAME for schema permission grant." >&2
+    exit 1
+  fi
+
+  schemas=(public)
+  if [[ "${DB_SCHEMA_NAME}" != "public" ]]; then
+    schemas+=("${DB_SCHEMA_NAME}")
+  fi
+
+  for schema_name in "${schemas[@]}"; do
+    echo "Ensuring schema permissions on '${db_name}.${schema_name}' for role '${db_user}'..."
+    if [[ "${db_host}" == "127.0.0.1" || "${db_host}" == "localhost" ]] && [[ -z "${DB_ADMIN_PASSWORD}" ]]; then
+      su -s /bin/bash - postgres -c "psql -d '${db_name}' -v ON_ERROR_STOP=1 -v db_user='${db_user}' -v schema_name='${schema_name}'" <<'SQL'
+SELECT format('GRANT USAGE, CREATE ON SCHEMA %I TO %I', :'schema_name', :'db_user')
+FROM pg_namespace
+WHERE nspname = :'schema_name' \gexec
+SQL
+    else
+      env "PGPASSWORD=${DB_ADMIN_PASSWORD}" psql \
+        -h "${db_host}" -p "${db_port}" -U "${DB_ADMIN_USER}" -d "${db_name}" \
+        -v ON_ERROR_STOP=1 \
+        -v db_user="${db_user}" \
+        -v schema_name="${schema_name}" <<'SQL'
+SELECT format('GRANT USAGE, CREATE ON SCHEMA %I TO %I', :'schema_name', :'db_user')
+FROM pg_namespace
+WHERE nspname = :'schema_name' \gexec
+SQL
+    fi
+  done
 }
 
 normalize_name_with_env_suffix() {
@@ -767,6 +880,8 @@ su -s /bin/bash - "${APP_USER}" -c "export GIT_TERMINAL_PROMPT=0; cd '${NEW_RELE
 validate_required_ops_env_files "${NEW_RELEASE}"
 normalize_db_env_in_ops
 copy_ops_env_to_release "${NEW_RELEASE}"
+validate_auth_offline_grace_env_consistency "${NEW_RELEASE}"
+grant_db_schema_permissions "${NEW_RELEASE}"
 
 echo "Checking PHP extensions required by composer files..."
 mapfile -t PROJECT_REQUIRED_EXTENSIONS < <(collect_required_project_extensions "${NEW_RELEASE}" | sed '/^$/d')
