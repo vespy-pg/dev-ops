@@ -6,6 +6,7 @@ Scope: Menu for repository-root feature and draft specs. Use this before scannin
 
 ## Features
 
+- [Init Requires Prepared Env Files](features/init-requires-prepared-env-files/index.md) - `init-requires-prepared-env-files`
 - [Test Deploy Prod Runtime Env](features/test-deploy-prod-runtime-env/index.md) - `test-deploy-prod-runtime-env`
 
 ## Drafts

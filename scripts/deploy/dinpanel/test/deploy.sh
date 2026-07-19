@@ -19,6 +19,8 @@ COMMON_DIR="$(cd "${SCRIPT_DIR}/../common" && pwd)"
 export APP_NAME="${APP_NAME:-dinpanel-test}"
 export APP_BASE_DIR="${APP_BASE_DIR:-/var/www/${APP_NAME}}"
 export APP_RUNTIME_ENV="${APP_RUNTIME_ENV:-prod}"
+export FORCE_HTTPS_REDIRECT="${FORCE_HTTPS_REDIRECT:-1}"
+export ENABLE_TLS_AUTOMATION="${ENABLE_TLS_AUTOMATION:-1}"
 export INSTALL_DEV_DEPENDENCIES="${INSTALL_DEV_DEPENDENCIES:-1}"
 
 if [[ "${APP_NAME}" == "dinpanel" || "${APP_BASE_DIR%/}" == "/var/www/dinpanel" ]]; then

@@ -41,6 +41,7 @@ DB_PORT="${DB_PORT:-5432}"
 DB_NAME="${DB_NAME:-dinpanel}"
 DB_USER="${DB_USER:-${DB_USERNAME:-dinpanel_user}}"
 DB_USERNAME="${DB_USERNAME:-${DB_USER}}"
+DB_PASSWORD="${DB_PASSWORD:-}"
 DB_ENV_FILE="${DB_ENV_FILE:-.api.env}"
 DB_ADMIN_DB="${DB_ADMIN_DB:-postgres}"
 DB_ADMIN_USER="${DB_ADMIN_USER:-postgres}"
@@ -49,6 +50,7 @@ DB_OWNER="${DB_OWNER:-${DB_ADMIN_USER}}"
 DB_SCHEMA_NAME="${DB_SCHEMA_NAME:-app}"
 DB_SCHEMA_OWNER="${DB_SCHEMA_OWNER:-${DB_ADMIN_USER}}"
 AUTH_OFFLINE_GRACE_HOURS_DEFAULT="${AUTH_OFFLINE_GRACE_HOURS_DEFAULT:-24}"
+REQUIRED_OPS_ENV_FILES="${REQUIRED_OPS_ENV_FILES:-.api.env .web.env}"
 
 ENABLE_DB_BOOTSTRAP="${ENABLE_DB_BOOTSTRAP:-1}" # 1 = create db/user and run sql/[!0_]*
 ENABLE_WEB_BUILD="${ENABLE_WEB_BUILD:-0}"       # 1 = install node/npm and build web
@@ -149,6 +151,72 @@ validate_positive_integer_env_value() {
   local value="$2"
   if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
     echo "${key} must be a positive integer hour value." >&2
+    exit 1
+  fi
+}
+
+validate_initial_ops_env_files() {
+  local env_file=""
+  local env_path=""
+  local db_env_path="${OPS_ENV_DIR}/${DB_ENV_FILE}"
+  local db_user=""
+  local db_password=""
+  local value=""
+  local -a missing=()
+
+  if [[ ! -d "${OPS_ENV_DIR}" ]]; then
+    echo "Missing ops env directory: ${OPS_ENV_DIR}" >&2
+    echo "Create the environment directory and required env files before running init." >&2
+    exit 1
+  fi
+
+  for env_file in ${REQUIRED_OPS_ENV_FILES}; do
+    env_path="${OPS_ENV_DIR}/${env_file}"
+    if [[ ! -f "${env_path}" ]]; then
+      missing+=("${env_file}")
+      continue
+    fi
+    if [[ ! -s "${env_path}" ]]; then
+      echo "Required ops env file is empty: ${env_path}" >&2
+      exit 1
+    fi
+    if [[ ! -r "${env_path}" ]]; then
+      echo "Required ops env file is not readable: ${env_path}" >&2
+      exit 1
+    fi
+  done
+
+  if (( ${#missing[@]} > 0 )); then
+    echo "Missing required ops env files in ${OPS_ENV_DIR}: ${missing[*]}" >&2
+    echo "Init will not create env files from examples. Prepare them explicitly before running init." >&2
+    exit 1
+  fi
+
+  if [[ ! -f "${db_env_path}" ]]; then
+    echo "Missing DB env file: ${db_env_path}" >&2
+    exit 1
+  fi
+
+  for env_file in DB_HOST DB_PORT DB_NAME; do
+    value="$(strip_wrapping_quotes "$(read_env_value "${db_env_path}" "${env_file}")")"
+    if [[ -z "${value}" ]]; then
+      echo "${env_file} must be set in ${db_env_path}" >&2
+      exit 1
+    fi
+  done
+
+  db_user="$(strip_wrapping_quotes "$(read_env_value "${db_env_path}" DB_USER)")"
+  if [[ -z "${db_user}" ]]; then
+    db_user="$(strip_wrapping_quotes "$(read_env_value "${db_env_path}" DB_USERNAME)")"
+  fi
+  if [[ -z "${db_user}" ]]; then
+    echo "DB_USER or DB_USERNAME must be set in ${db_env_path}" >&2
+    exit 1
+  fi
+
+  db_password="$(strip_wrapping_quotes "$(read_env_value "${db_env_path}" DB_PASSWORD)")"
+  if [[ -z "${db_password}" ]]; then
+    echo "DB_PASSWORD must be set in ${db_env_path}" >&2
     exit 1
   fi
 }
@@ -650,7 +718,6 @@ prepare_ops_env_files() {
   local target_file=""
   local -a example_paths=()
 
-  mkdir -p "${OPS_ENV_DIR}"
   touch "${gitignore_file}"
   if ! grep -qxF "*.env" "${gitignore_file}"; then
     echo "*.env" >> "${gitignore_file}"
@@ -670,11 +737,10 @@ prepare_ops_env_files() {
     target_name="${example_name%.example}"
     target_file="${OPS_ENV_DIR}/${target_name}"
 
-    if [[ -f "${target_file}" ]] && ! prompt_overwrite_default_no "${target_file}"; then
-      echo "Keeping existing ${target_file}"
-    else
-      cp "${source_file}" "${target_file}"
-      echo "Prepared ${target_file}"
+    if [[ ! -f "${target_file}" ]]; then
+      echo "Missing required ops env file: ${target_file}" >&2
+      echo "Init will not create env files from ${example_name}; prepare env values explicitly before running init." >&2
+      exit 1
     fi
     chmod 600 "${target_file}"
     chown "${APP_USER}:${APP_GROUP}" "${target_file}"
@@ -693,6 +759,7 @@ bootstrap_database() {
   local -a phase2_sql_files=()
   local -a ops_env_files=()
   local db_admin_psql_base=()
+  local db_password=""
 
   if [[ ! -f "${ops_main_env}" ]]; then
     if [[ -f "${OPS_ENV_DIR}/.env" ]]; then
@@ -723,11 +790,18 @@ bootstrap_database() {
     DB_USER="$(strip_wrapping_quotes "$(read_env_value "${ops_main_env}" "DB_USERNAME")")"
   fi
   DB_USER="${DB_USER:-dinpanel_user}"
+  if [[ -z "${DB_PASSWORD}" ]]; then
+    db_password="$(strip_wrapping_quotes "$(read_env_value "${ops_main_env}" "DB_PASSWORD")")"
+    DB_PASSWORD="${db_password}"
+  fi
+  if [[ -z "${DB_PASSWORD}" ]]; then
+    echo "DB_PASSWORD must be set in ${ops_main_env}. Init will not generate a database password." >&2
+    exit 1
+  fi
 
   DB_NAME="$(normalize_name_with_env_suffix "${DB_NAME}")"
   DB_USER="$(normalize_name_with_env_suffix "${DB_USER}")"
   DB_USERNAME="${DB_USER}"
-  DB_PASSWORD="$(build_db_password)"
 
   if ! is_safe_sql_identifier "${DB_NAME}" || ! is_safe_sql_identifier "${DB_USER}"; then
     echo "Unsafe DB_NAME or DB_USER after suffix normalization." >&2
@@ -949,6 +1023,7 @@ ensure_pwa_web_assets() {
   fi
 }
 
+validate_initial_ops_env_files
 echo "Installing required system packages..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update

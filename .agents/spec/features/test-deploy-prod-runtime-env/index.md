@@ -20,9 +20,10 @@ Keep the test deployment target separate from production while running Symfony w
 - [x] Confirm failure source.
 - [x] Set test deploy wrapper default `APP_RUNTIME_ENV=prod`.
 - [x] Set test init wrapper default `APP_RUNTIME_ENV=prod`.
+- [x] Enable HTTPS redirect and TLS automation by default for the test target.
 - [x] Verify shell syntax.
 - [x] Update spec registry.
 
 ## Current Status
 
-`scripts/deploy/dinpanel/test/deploy.sh` and `scripts/deploy/dinpanel/test/init.sh` default `APP_RUNTIME_ENV` to `prod`, while keeping `APP_NAME=dinpanel-test`, `APP_BASE_DIR=/var/www/dinpanel-test`, and the common deploy environment argument as `test`.
+`scripts/deploy/dinpanel/test/deploy.sh` and `scripts/deploy/dinpanel/test/init.sh` default `APP_RUNTIME_ENV` to `prod`, enable TLS automation/HTTPS redirects, while keeping `APP_NAME=dinpanel-test`, `APP_BASE_DIR=/var/www/dinpanel-test`, and the common deploy environment argument as `test`.
