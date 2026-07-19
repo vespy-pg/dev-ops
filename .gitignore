@@ -1,0 +1,14 @@
+codex-ssh
+codex-ssh.pub
+.agents/.env
+.agents/var/**
+!.agents/var/
+!.agents/var/.gitignore
+!.agents/var/docs/
+!.agents/var/docs/.gitkeep
+!.agents/var/logs/
+!.agents/var/logs/.gitkeep
+!.agents/var/sql/
+!.agents/var/sql/.gitkeep
+!.agents/var/tmp/
+!.agents/var/tmp/.gitkeep

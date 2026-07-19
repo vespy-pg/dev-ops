@@ -12,6 +12,7 @@ COMMON_DIR="$(cd "${SCRIPT_DIR}/../common" && pwd)"
 
 export APP_NAME="${APP_NAME:-dinpanel-test}"
 export APP_BASE_DIR="${APP_BASE_DIR:-/var/www/${APP_NAME}}"
+export APP_RUNTIME_ENV="${APP_RUNTIME_ENV:-prod}"
 export NON_INTERACTIVE="${NON_INTERACTIVE:-1}"
 export ENABLE_WEB_BUILD="${ENABLE_WEB_BUILD:-1}"
 export INSTALL_DEV_DEPENDENCIES="${INSTALL_DEV_DEPENDENCIES:-1}"
