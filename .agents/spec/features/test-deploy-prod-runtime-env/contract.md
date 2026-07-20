@@ -21,11 +21,18 @@ It also ensures the test site gets its own Let's Encrypt certificate and HTTP re
 
 Deploying the test instance should use the test app directory and test database env files copied from `scripts/deploy/dinpanel/test`, but console commands such as Doctrine migrations and cache warmup run with Symfony `--env=prod`.
 
-TLS defaults use the common script's derived domains for test:
+TLS defaults use explicit test wrapper domains that currently resolve to the test host:
 
 - `test.dinpanel.com`
-- `www.test.dinpanel.com`
 - `api.test.dinpanel.com`
+
+`www.test.dinpanel.com` is intentionally excluded from the default because it currently has no DNS record. Operators may opt in with `TLS_DOMAINS` after DNS exists.
+
+TLS automation must reconcile the existing named certificate to the requested `TLS_DOMAINS` set. This allows a previous `test.dinpanel.com` lineage that included `www.test.dinpanel.com` to be renewed without the DNS-missing hostname.
+
+During init, after TLS automation issues or renews a certificate, Apache vhosts are regenerated, config-tested, and reloaded before the script continues. This prevents a successful cert issuance from leaving the active test site with only HTTP vhosts.
+
+When a certificate exists, common init/deploy scripts generate HTTPS vhosts only for names present in `TLS_DOMAINS`. HTTP vhosts may still exist for redirect and ACME handling, but Apache should not bind a `:443` `ServerName` to a certificate that was not requested for that name.
 
 ## Boundaries
 

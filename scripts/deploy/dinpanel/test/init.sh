@@ -17,6 +17,7 @@ export NON_INTERACTIVE="${NON_INTERACTIVE:-1}"
 export ENABLE_WEB_BUILD="${ENABLE_WEB_BUILD:-1}"
 export FORCE_HTTPS_REDIRECT="${FORCE_HTTPS_REDIRECT:-1}"
 export ENABLE_TLS_AUTOMATION="${ENABLE_TLS_AUTOMATION:-1}"
+export TLS_DOMAINS="${TLS_DOMAINS:-test.dinpanel.com api.test.dinpanel.com}"
 export INSTALL_DEV_DEPENDENCIES="${INSTALL_DEV_DEPENDENCIES:-1}"
 
 if [[ "${APP_NAME}" == "dinpanel" || "${APP_BASE_DIR%/}" == "/var/www/dinpanel" ]]; then

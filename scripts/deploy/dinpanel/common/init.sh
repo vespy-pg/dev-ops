@@ -348,6 +348,17 @@ cert_file_exists() {
   [[ -f "${file_path}" && -s "${file_path}" ]]
 }
 
+tls_domains_include() {
+  local expected="$1"
+  local domain=""
+
+  for domain in ${TLS_DOMAINS}; do
+    [[ "${domain}" == "${expected}" ]] && return 0
+  done
+
+  return 1
+}
+
 configure_certbot_renew_hook() {
   local hook_dir="/etc/letsencrypt/renewal-hooks/deploy"
   local hook_file="${hook_dir}/${APP_NAME}-reload-apache.sh"
@@ -374,7 +385,7 @@ ensure_tls_certificate() {
     --cert-name "${TLS_CERT_NAME}"
     --agree-tos
     --non-interactive
-    --expand
+    --renew-with-new-domains
   )
 
   if [[ -n "${TLS_EMAIL}" ]]; then
@@ -465,7 +476,8 @@ EOF
 
   if cert_file_exists "${TLS_CERT_FULLCHAIN}" && cert_file_exists "${TLS_CERT_PRIVKEY}"; then
     tls_vhost_enabled=1
-    https_vhosts="$(cat <<EOF
+    if tls_domains_include "${WWW_APP_DOMAIN}"; then
+      https_vhosts+="$(cat <<EOF
 <VirtualHost *:443>
     ServerName ${WWW_APP_DOMAIN}
     SSLEngine on
@@ -479,6 +491,12 @@ EOF
     CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_www_ssl_access.log combined
 </VirtualHost>
 
+EOF
+)"
+    fi
+
+    if tls_domains_include "${CANONICAL_APP_DOMAIN}"; then
+      https_vhosts+="$(cat <<EOF
 <VirtualHost *:443>
     ServerName ${CANONICAL_APP_DOMAIN}
     SSLEngine on
@@ -497,6 +515,12 @@ EOF
     CustomLog \${APACHE_LOG_DIR}/${APP_NAME}_spa_ssl_access.log combined
 </VirtualHost>
 
+EOF
+)"
+    fi
+
+    if tls_domains_include "${API_DOMAIN}"; then
+      https_vhosts+="$(cat <<EOF
 <VirtualHost *:443>
     ServerName ${API_DOMAIN}
     SSLEngine on
@@ -521,6 +545,7 @@ EOF
 
 EOF
 )"
+    fi
   elif [[ "${FORCE_HTTPS_REDIRECT}" == "1" ]]; then
     echo "Warning: TLS certificate missing at ${TLS_CERT_FULLCHAIN} / ${TLS_CERT_PRIVKEY}; writing only :80 vhosts." >&2
   fi
@@ -1158,6 +1183,8 @@ if [[ "${ENABLE_TLS_AUTOMATION}" == "1" ]]; then
   configure_certbot_renew_hook
   configure_apache_vhost
   disable_default_apache_icons_alias
+  apache2ctl configtest
+  systemctl reload "${APACHE_SERVICE}"
 fi
 
 echo "Validating repository access for ${APP_USER}..."
