@@ -6,6 +6,7 @@
 - `bash -n scripts/deploy/dinpanel/test/init.sh`
 - `bash -n scripts/deploy/dinpanel/common/init.sh`
 - `bash -n scripts/deploy/dinpanel/common/deploy.sh`
+- Static Apache-generation review: optional HTTPS vhost heredoc appends now add explicit blank-line separators after each appended block in both common init and deploy scripts.
 - DNS check: `test.dinpanel.com` and `api.test.dinpanel.com` resolve to the test host; `www.test.dinpanel.com` has no A record.
 - Local script hardening: certbot now uses `--renew-with-new-domains` for named lineages instead of `--expand`, so existing certificates can drop removed SANs.
 - Initial read-only remote check: Apache had no `:443` vhost for `test.dinpanel.com`, so HTTPS fell through to the production `dinpanel.com` certificate.
@@ -23,8 +24,9 @@
 - Test deploy was not executed.
 - Production deploy was not executed.
 - No full test deploy was executed after the live TLS repair.
+- No Apache configtest/reload was run for this local script fix; that requires the target host and explicit approval.
 - ShellCheck was not run because it is not installed in the local environment.
 
 ## Hardening
 
-Live HTTPS is repaired. A future test deploy should preserve it through the updated TLS domain defaults and HTTPS-vhost generation rules.
+Live HTTPS was previously repaired. Future test deploy/init runs should preserve it through the updated TLS domain defaults, HTTPS-vhost generation rules, and explicit separators between optional HTTPS vhost blocks.

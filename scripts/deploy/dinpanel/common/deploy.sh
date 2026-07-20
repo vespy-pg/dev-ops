@@ -737,6 +737,7 @@ EOF
 
 EOF
 )"
+      https_vhosts+=$'\n\n'
     fi
 
     if tls_domains_include "${CANONICAL_APP_DOMAIN}"; then
@@ -761,6 +762,7 @@ EOF
 
 EOF
 )"
+      https_vhosts+=$'\n\n'
     fi
 
     if tls_domains_include "${API_DOMAIN}"; then
@@ -789,6 +791,7 @@ EOF
 
 EOF
 )"
+      https_vhosts+=$'\n\n'
     fi
   elif [[ "${FORCE_HTTPS_REDIRECT}" == "1" ]]; then
     echo "Warning: TLS certificate missing at ${TLS_CERT_FULLCHAIN} / ${TLS_CERT_PRIVKEY}; writing only :80 vhosts." >&2

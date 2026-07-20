@@ -34,6 +34,8 @@ During init, after TLS automation issues or renews a certificate, Apache vhosts 
 
 When a certificate exists, common init/deploy scripts generate HTTPS vhosts only for names present in `TLS_DOMAINS`. HTTP vhosts may still exist for redirect and ACME handling, but Apache should not bind a `:443` `ServerName` to a certificate that was not requested for that name.
 
+Optional HTTPS vhost blocks are concatenated with explicit newline separators. This preserves valid Apache syntax when more than one TLS-backed name is enabled, because Bash command substitution strips trailing newlines from heredoc output before `+=` appends the next block.
+
 ## Boundaries
 
 This does not change production deploy behavior, database credentials, host configuration, Apache configuration, or Doctrine migration execution policy.

@@ -9,3 +9,4 @@
 - Certbot should use `--renew-with-new-domains` for named lineages so an existing test certificate can drop the DNS-missing `www.test.dinpanel.com` SAN.
 - Test init should reload Apache immediately after generating TLS-backed vhosts so HTTPS is active even if later init steps fail.
 - Common Apache generation should not create HTTPS vhosts for names omitted from `TLS_DOMAINS`.
+- Common Apache generation must add explicit separators after optional heredoc-appended HTTPS vhosts, because command substitution removes trailing newlines before the next block is appended.

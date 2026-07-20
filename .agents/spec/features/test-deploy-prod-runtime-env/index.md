@@ -1,6 +1,6 @@
 # Test Deploy Prod Runtime Env
 
-Date: 2026-07-19
+Date: 2026-07-20
 Status: Implemented
 Scope: Test deploy/init wrappers for `dinpanel-test`.
 
@@ -25,9 +25,10 @@ Keep the test deployment target separate from production while running Symfony w
 - [x] Reconcile existing named TLS certificates to the requested domain set.
 - [x] Reload Apache after init creates TLS-backed vhosts.
 - [x] Generate HTTPS vhosts only for names covered by `TLS_DOMAINS`.
+- [x] Keep concatenated optional HTTPS vhost blocks separated by explicit newlines.
 - [x] Verify shell syntax.
 - [x] Update spec registry.
 
 ## Current Status
 
-`scripts/deploy/dinpanel/test/deploy.sh` and `scripts/deploy/dinpanel/test/init.sh` default `APP_RUNTIME_ENV` to `prod`, enable TLS automation/HTTPS redirects, request TLS only for `test.dinpanel.com` and `api.test.dinpanel.com` by default, while keeping `APP_NAME=dinpanel-test`, `APP_BASE_DIR=/var/www/dinpanel-test`, and the common deploy environment argument as `test`.
+`scripts/deploy/dinpanel/test/deploy.sh` and `scripts/deploy/dinpanel/test/init.sh` default `APP_RUNTIME_ENV` to `prod`, enable TLS automation/HTTPS redirects, request TLS only for `test.dinpanel.com` and `api.test.dinpanel.com` by default, while keeping `APP_NAME=dinpanel-test`, `APP_BASE_DIR=/var/www/dinpanel-test`, and the common deploy environment argument as `test`. Common Apache generation now adds explicit separators between optional HTTPS vhost blocks so multiple TLS-backed names cannot be written as a single malformed Apache directive line.
